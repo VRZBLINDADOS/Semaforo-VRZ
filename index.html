@@ -25,9 +25,10 @@ body{font-family:'Plus Jakarta Sans',sans-serif;margin:0;background:#fff;overflo
 .spin{animation:spin 1s linear infinite}
 
 .scroll-y{overflow-y:auto}
-.scroll-y::-webkit-scrollbar{width:4px}
+.scroll-y::-webkit-scrollbar{width:6px;height:6px}
 .scroll-y::-webkit-scrollbar-track{background:transparent}
-.scroll-y::-webkit-scrollbar-thumb{background:var(--border);border-radius:999px}
+.scroll-y::-webkit-scrollbar-thumb{background:var(--black);border-radius:999px}
+.scroll-y::-webkit-scrollbar-thumb:hover{background:#000}
 
 .nav-item{display:flex;align-items:center;gap:11px;padding:10px 12px;border-radius:9px;cursor:pointer;transition:all .18s;font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:rgba(255,255,255,.42);border:none;background:transparent;width:100%;text-align:left;font-family:'Plus Jakarta Sans',sans-serif}
 .nav-item:hover{background:rgba(255,255,255,.1);color:#fff}
@@ -54,10 +55,15 @@ body{font-family:'Plus Jakarta Sans',sans-serif;margin:0;background:#fff;overflo
 .badge{display:inline-flex;align-items:center;gap:5px;padding:4px 9px;border-radius:6px;font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;white-space:nowrap}
 .login-bg{background:linear-gradient(145deg,#0D0D0D 0%,#1A0505 60%,#2A0808 100%)}
 
-.vtable thead th{padding:10px 14px;font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);background:var(--smoke);border-bottom:1px solid var(--border);text-align:left;white-space:nowrap}
+.vtable thead th{padding:12px 14px;font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);background:var(--smoke);border-bottom:1px solid var(--border);text-align:left;white-space:nowrap;position:sticky;top:0;z-index:10}
 .vtable tbody tr{border-bottom:1px solid var(--smoke);transition:background .12s;cursor:pointer}
 .vtable tbody tr:hover{background:var(--smoke)}
-.vtable tbody td{padding:10px 14px;font-size:11.5px;color:var(--ink);white-space:nowrap}
+.vtable tbody td{padding:12px 14px;font-size:11.5px;color:var(--ink);white-space:nowrap}
+
+.filter-chip{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:20px;font-size:10px;font-weight:700;cursor:pointer;transition:all .2s;border:1.5px solid var(--border);background:#fff;color:var(--muted);text-transform:uppercase}
+.filter-chip.active{background:var(--red);color:#fff;border-color:var(--red)}
+
+.table-container{position:relative;flex:1;overflow:auto;background:#fff;border-radius:12px;border:1.5px solid var(--border)}
 
 @media(max-width:860px){
   .sidebar{display:none!important}
@@ -74,6 +80,8 @@ body{font-family:'Plus Jakarta Sans',sans-serif;margin:0;background:#fff;overflo
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
 <script src="https://unpkg.com/lucide@0.383.0/dist/umd/lucide.min.js"></script>
 <script src="https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.28/jspdf.plugin.autotable.min.js"></script>
 </head>
 <body>
 <div id="root"></div>
@@ -81,9 +89,8 @@ body{font-family:'Plus Jakarta Sans',sans-serif;margin:0;background:#fff;overflo
 const{useState,useEffect,useMemo,useRef}=React;
 
 /* ============================================================
-   FIREBASE — mesmo projeto do Portal de Compras, namespace próprio
+   FIREBASE
    ============================================================ */
-/* ⚠️ SUBSTITUA pelos dados do SEU projeto Firebase (Firebase Console → Configurações do projeto → Seus apps → SDK setup and configuration → Config). */
 const FB={
   apiKey:"AIzaSyCW_wNTEIWdEZ8nGlxbn0_K-G7s4M3RMw",
   authDomain:"semaforo-3521d.firebaseapp.com",
@@ -128,7 +135,7 @@ const MASTER_USER='Lucas.Sabino';
 const MASTER_PASS='29623298';
 
 /* ============================================================
-   ÍCONES (lucide via UMD)
+   ÍCONES
    ============================================================ */
 function toPascalCase(s){ return s.split('-').map(p=>p.charAt(0).toUpperCase()+p.slice(1)).join(''); }
 function toCamelCase(s){ const p=toPascalCase(s); return p.charAt(0).toLowerCase()+p.slice(1); }
@@ -185,28 +192,60 @@ function fmtDate(d){
   if(parts.length===3) return `${parts[2]}/${parts[1]}/${parts[0]}`;
   return d;
 }
+
 function toSlug(name){
   return (name||'').trim().toLowerCase()
     .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
     .split(/\s+/).filter(Boolean);
 }
+
 function usernameFor(name){
   const parts = toSlug(name);
   if(parts.length===0) return 'user';
   if(parts.length===1) return parts[0];
   return `${parts[0]}.${parts[parts.length-1]}`;
 }
+
 function initials(name){
   const parts = (name||'').trim().split(/\s+/);
   return ((parts[0]?.[0]||'')+(parts[1]?.[0]||parts[0]?.[1]||'')).toUpperCase();
 }
 
 const ROLE_LABEL = { master:'Master', operacional:'Operacional', comercial:'Comercial' };
-const ROLE_BADGE_STYLE = {
-  master:{ background:'linear-gradient(135deg,#0D0D0D,#2A0808)', color:'#FFD700', border:'1px solid #8B6914' },
-  operacional:{ background:'#1A4EC2', color:'#fff', border:'1px solid #1A4EC2' },
-  comercial:{ background:COLORS.red, color:'#fff', border:`1px solid ${COLORS.red}` },
-};
+
+/* ============================================================
+   FUNÇÕES DE CÁLCULO DE DATAS
+   ============================================================ */
+function isBusinessDay(date){
+  const day = date.getDay();
+  return day !== 0 && day !== 6;
+}
+
+function addBusinessDays(dateStr, numDays){
+  if(!dateStr) return null;
+  const parts = dateStr.split('-');
+  if(parts.length !== 3) return null;
+  const date = new Date(parseInt(parts[0]), parseInt(parts[1])-1, parseInt(parts[2]));
+  let count = 0;
+  while(count < numDays){
+    date.setDate(date.getDate() + 1);
+    if(isBusinessDay(date)) count++;
+  }
+  return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
+}
+
+function getMaxDate(date1, date2){
+  if(!date1 && !date2) return null;
+  if(!date1) return date2;
+  if(!date2) return date1;
+  return date1 > date2 ? date1 : date2;
+}
+
+function calculateDataContratual(dataAt, dataKitVidro){
+  const maxDate = getMaxDate(dataAt, dataKitVidro);
+  if(!maxDate) return null;
+  return addBusinessDays(maxDate, 30);
+}
 
 /* ============================================================
    ÁTOMOS DE UI
@@ -235,16 +274,18 @@ function StatCard({ iconName, label, value, sub, accent }){
   );
 }
 
-function EyeGlyph({ open, size=16, color='currentColor' }){
-  return open ? (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7Z"/><circle cx="12" cy="12" r="3"/>
-    </svg>
-  ) : (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a20.6 20.6 0 0 1 5.06-6.06M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a20.6 20.6 0 0 1-2.68 3.9M14.12 14.12a3 3 0 1 1-4.24-4.24"/>
-      <path d="M1 1l22 22"/>
-    </svg>
+function Modal({ title, children, onClose }){
+  return (
+    <div style={{ position:'fixed', inset:0, zIndex:300, display:'flex', alignItems:'center', justifyContent:'center', padding:20 }}>
+      <div className="fade-in" onClick={onClose} style={{ position:'absolute', inset:0, background:'rgba(13,13,13,.5)' }} />
+      <div className="fade-up card" style={{ position:'relative', width:'100%', maxWidth:500, background:'#fff', display:'flex', flexDirection:'column', maxHeight:'90vh' }}>
+        <div style={{ padding:'18px 22px', borderBottom:`1px solid ${COLORS.border}`, display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+          <div style={{ fontSize:14, fontWeight:800, textTransform:'uppercase', letterSpacing:'.05em' }}>{title}</div>
+          <button onClick={onClose} style={{ background:'none', border:'none', cursor:'pointer', color:COLORS.muted }}><Icon name="x" size={20}/></button>
+        </div>
+        <div className="scroll-y" style={{ flex:1, padding:22 }}>{children}</div>
+      </div>
+    </div>
   );
 }
 
@@ -269,100 +310,33 @@ function LoginView({ users, onLogin }){
   };
 
   return (
-    <div className="login-bg" style={{ height:'100vh', width:'100%', display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}>
-      <div className="fade-in" style={{ background:'#fff', width:'100%', maxWidth:400, borderRadius:24, overflow:'hidden', boxShadow:'0 40px 80px rgba(0,0,0,.4)', borderBottom:`6px solid ${COLORS.red}` }}>
-        <div style={{ background:COLORS.ink, padding:'40px 32px', textAlign:'center', color:'#fff' }}>
-          <div style={{ width:56, height:56, background:COLORS.red, borderRadius:16, display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 16px', boxShadow:'0 8px 24px rgba(220,31,31,.4)' }}>
-            <Icon name="truck" size={28} color="#fff" />
+    <div className="login-bg" style={{ height:'100vh', width:'100%', display:'flex', alignItems:'center', justifyContent:'center', padding:20 }}>
+      <div className="card fade-up" style={{ width:'100%', maxWidth:360, padding:32 }}>
+        <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:28 }}>
+          <div style={{ width:40, height:40, background:COLORS.red, borderRadius:12, display:'flex', alignItems:'center', justifyContent:'center' }}>
+            <Icon name="traffic-light" size={22} color="#fff" />
           </div>
-          <h1 style={{ fontSize:32, fontWeight:800, margin:0, letterSpacing:'-.02em', color:'#fff' }}>Portal Semáforo</h1>
-          <p style={{ fontSize:9, fontWeight:700, textTransform:'uppercase', letterSpacing:'.18em', color:'rgba(255,255,255,.35)', margin:'8px 0 0' }}>Acompanhamento de Produção</p>
+          <div style={{ fontSize:20, fontWeight:900, letterSpacing:'-.01em' }}>Semáforo</div>
         </div>
-        <form onSubmit={submit} style={{ padding:32, display:'flex', flexDirection:'column', gap:18 }}>
-          {err && (
-            <div className="shake" style={{ background:COLORS.redLight, border:'1px solid #FFBDBD', borderRadius:10, padding:'10px 14px', display:'flex', alignItems:'center', gap:8 }}>
-              <Icon name="alert-circle" size={14} color={COLORS.red} />
-              <span style={{ fontSize:10, fontWeight:700, textTransform:'uppercase', color:COLORS.red }}>{err}</span>
-            </div>
-          )}
+
+        <form onSubmit={submit} style={{ display:'flex', flexDirection:'column', gap:16 }}>
           <div>
-            <label style={{ fontSize:8, fontWeight:800, textTransform:'uppercase', letterSpacing:'.14em', color:COLORS.muted, display:'block', marginBottom:6 }}>Usuário</label>
-            <div style={{ position:'relative' }}>
-              <div style={{ position:'absolute', left:12, top:'50%', transform:'translateY(-50%)', color:COLORS.muted }}><Icon name="user" size={15} /></div>
-              <input className="input" style={{ paddingLeft:38 }} value={u} onChange={e=>setU(e.target.value)} placeholder="Nome.Sobrenome" autoCapitalize="none" required />
-            </div>
+            <label style={{ fontSize:10, fontWeight:800, textTransform:'uppercase', color:COLORS.muted, display:'block', marginBottom:8 }}>Usuário</label>
+            <input className="input" value={u} onChange={e=>setU(e.target.value)} required />
           </div>
           <div>
-            <label style={{ fontSize:8, fontWeight:800, textTransform:'uppercase', letterSpacing:'.14em', color:COLORS.muted, display:'block', marginBottom:6 }}>Senha</label>
+            <label style={{ fontSize:10, fontWeight:800, textTransform:'uppercase', color:COLORS.muted, display:'block', marginBottom:8 }}>Senha</label>
             <div style={{ position:'relative' }}>
-              <div style={{ position:'absolute', left:12, top:'50%', transform:'translateY(-50%)', color:COLORS.muted }}><Icon name="lock" size={15} /></div>
-              <input className="input" type={showP?'text':'password'} style={{ paddingLeft:38, paddingRight:40 }} value={p} onChange={e=>setP(e.target.value)} placeholder="••••••••" required />
-              <button type="button" onClick={()=>setShowP(!showP)} style={{ position:'absolute', right:10, top:'50%', transform:'translateY(-50%)', background:'none', border:'none', cursor:'pointer', color:COLORS.muted, padding:4, display:'flex' }} aria-label={showP?'Ocultar senha':'Mostrar senha'}>
-                <EyeGlyph open={showP} size={16}/>
+              <input className="input" type={showP?'text':'password'} value={p} onChange={e=>setP(e.target.value)} required />
+              <button type="button" onClick={()=>setShowP(!showP)} style={{ position:'absolute', right:12, top:'50%', transform:'translateY(-50%)', background:'none', border:'none', cursor:'pointer', color:COLORS.muted }}>
+                <Icon name={showP?'eye-off':'eye'} size={16} />
               </button>
             </div>
           </div>
-          <button type="submit" className="btn-primary" style={{ width:'100%', padding:14, fontSize:11 }}>Entrar no Portal</button>
+          {err && <div style={{ padding:10, background:COLORS.redLight, color:COLORS.red, borderRadius:8, fontSize:12, fontWeight:600 }}>{err}</div>}
+          <button type="submit" className="btn-primary" style={{ width:'100%', marginTop:8 }}>Entrar</button>
         </form>
       </div>
-    </div>
-  );
-}
-
-/* ============================================================
-   NAVEGAÇÃO
-   ============================================================ */
-const NAV_ITEMS = {
-  master:      [ ['dashboard','Dashboard','layout-dashboard'], ['veiculos','Veículos','search'], ['comercial','Visão Comercial','building-2'], ['ia','Consulta IA','message-square'], ['upload','Upload Planilha','upload'], ['usuarios','Usuários','user-cog'] ],
-  operacional: [ ['dashboard','Dashboard','layout-dashboard'], ['veiculos','Veículos','search'], ['comercial','Visão Comercial','building-2'], ['ia','Consulta IA','message-square'] ],
-  comercial:   [ ['dashboard','Meu Painel','layout-dashboard'], ['comercial','Meus Veículos','building-2'], ['ia','Consulta IA','message-square'] ],
-};
-
-function Sidebar({ role, active, setActive, user, onLogout }){
-  const items = NAV_ITEMS[role] || [];
-  return (
-    <div className="sidebar" style={{ width:230, flexShrink:0, background:COLORS.black, height:'100vh', display:'flex', flexDirection:'column', padding:'20px 14px' }}>
-      <div style={{ display:'flex', alignItems:'center', gap:10, padding:'6px 8px 22px' }}>
-        <div style={{ width:34, height:34, background:COLORS.red, borderRadius:9, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
-          <Icon name="truck" size={18} color="#fff" />
-        </div>
-        <div style={{ color:'#fff', fontWeight:800, fontSize:14, letterSpacing:'-.01em', lineHeight:1.15 }}>Portal<br/>Semáforo</div>
-      </div>
-      <div style={{ display:'flex', flexDirection:'column', gap:4, flex:1 }}>
-        {items.map(([key,label,iconName]) => (
-          <button key={key} className={`nav-item ${active===key?'active':''}`} onClick={()=>setActive(key)}>
-            <span className="nav-icon"><Icon name={iconName} size={14} /></span>{label}
-          </button>
-        ))}
-      </div>
-      <div style={{ borderTop:'1px solid rgba(255,255,255,.1)', paddingTop:14, marginTop:10 }}>
-        <div style={{ display:'flex', alignItems:'center', gap:10, padding:'6px 8px', marginBottom:8 }}>
-          <div style={{ width:30, height:30, borderRadius:8, background:'rgba(255,255,255,.08)', display:'flex', alignItems:'center', justifyContent:'center', color:'#fff', fontSize:11, fontWeight:800, flexShrink:0 }}>
-            {initials(user.nome)}
-          </div>
-          <div style={{ minWidth:0 }}>
-            <div style={{ color:'#fff', fontSize:11, fontWeight:700, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{user.nome}</div>
-            <div style={{ fontSize:8, fontWeight:800, textTransform:'uppercase', letterSpacing:'.06em', color:'rgba(255,255,255,.4)' }}>{ROLE_LABEL[user.role]}</div>
-          </div>
-        </div>
-        <button className="nav-item" onClick={onLogout} style={{ color:'rgba(255,255,255,.5)' }}>
-          <span className="nav-icon"><Icon name="log-out" size={14} /></span>Sair
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function BottomNav({ role, active, setActive }){
-  const items = NAV_ITEMS[role] || [];
-  return (
-    <div className="bottom-nav">
-      {items.map(([key,label,iconName]) => (
-        <button key={key} className="bottom-nav-btn" onClick={()=>setActive(key)} style={{ color: active===key?COLORS.red:COLORS.muted }}>
-          <Icon name={iconName} size={17} />
-          <span>{label.split(' ')[0]}</span>
-        </button>
-      ))}
     </div>
   );
 }
@@ -371,347 +345,507 @@ function BottomNav({ role, active, setActive }){
    DASHBOARD
    ============================================================ */
 function DashboardView({ vehicles, role, user }){
-  const kpis = useMemo(() => {
-    const emProducao = vehicles.filter(v=>v.etapa!=='ENTREGUE').length;
-    const concluidos = vehicles.filter(v=>v.etapa==='ENTREGUE').length;
-    const atrasados = vehicles.filter(v=>v.etapa!=='ENTREGUE' && v.dias!=null && v.dias<0).length;
-    const aguardandoPecas = vehicles.filter(v=>{
-      const o=(v.observacoes||'').toUpperCase();
-      return o.includes('PENDÊNCIA DE PEÇAS') || o.includes('PENDENCIA DE PEÇAS') || o.includes('AGUARDANDO ENTREGA');
-    }).length;
-    const aguardandoVidros = vehicles.filter(v=>v.etapa==='VIDRO').length;
-    const aguardandoAt = vehicles.filter(v=>{
-      const db=(v.db||'').toUpperCase();
-      return !v.dataAt || db.includes('PROACTA') || db.includes('AGUARDANDO');
-    }).length;
-    return { emProducao, concluidos, atrasados, aguardandoPecas, aguardandoVidros, aguardandoAt };
+  const [selectedVendor, setSelectedVendor] = useState('ALL');
+  
+  const isMaster = role === 'master';
+  const vendedoresUnicos = useMemo(() => {
+    return [...new Set(vehicles.map(v=>v.vendedor).filter(Boolean))].sort();
   }, [vehicles]);
 
-  const porEtapa = useMemo(() => {
-    const map = {};
-    vehicles.forEach(v => { const e=v.etapa||'—'; map[e]=(map[e]||0)+1; });
-    return ETAPAS_ORDER.filter(e=>map[e]).map(e => ({ etapa:e, qtd:map[e] }));
-  }, [vehicles]);
+  const scoped = useMemo(() => {
+    if (isMaster && selectedVendor !== 'ALL') {
+      return vehicles.filter(v => v.vendedor === selectedVendor);
+    }
+    if (!isMaster) {
+      return vehicles.filter(v => v.vendedor === user.vendedor);
+    }
+    return vehicles;
+  }, [vehicles, selectedVendor, isMaster, user]);
 
-  const porVendedor = useMemo(() => {
-    const map = {};
-    vehicles.forEach(v => { if(v.vendedor) map[v.vendedor]=(map[v.vendedor]||0)+1; });
-    return Object.entries(map).sort((a,b)=>b[1]-a[1]).slice(0,8).map(([nome,qtd])=>({ nome: nome.length>16?nome.slice(0,15)+'…':nome, qtd }));
-  }, [vehicles]);
+  const total = scoped.length;
+  const entregues = scoped.filter(v=>v.etapa==='ENTREGUE').length;
+  const emProducao = scoped.filter(v=>v.etapa!=='ENTREGUE').length;
+  const atrasados = scoped.filter(v=>v.etapa!=='ENTREGUE' && v.dias!=null && v.dias<0).length;
+  const noAmarelo = scoped.filter(v=>v.etapa!=='ENTREGUE' && v.dias!=null && v.dias===0).length;
+  const noVerde = scoped.filter(v=>v.etapa!=='ENTREGUE' && v.dias!=null && v.dias>0).length;
+  
+  const taxaEntrega = total > 0 ? Math.round((entregues / total) * 100) : 0;
+  const leadTimeMedia = useMemo(() => {
+    const comLeadTime = scoped.filter(v => v.leadTime != null && v.etapa === 'ENTREGUE');
+    if (comLeadTime.length === 0) return 0;
+    const soma = comLeadTime.reduce((acc, v) => acc + Number(v.leadTime), 0);
+    return Math.round(soma / comLeadTime.length);
+  }, [scoped]);
 
-  const cumprimento = useMemo(() => {
-    let sim=0, nao=0, na=0;
-    vehicles.forEach(v => {
-      if(v.cumprimentoPrazo==='SIM') sim++;
-      else if(v.cumprimentoPrazo==='NÃO') nao++;
-      else na++;
+  const etapaDistribution = useMemo(() => {
+    const dist = {};
+    ETAPAS_ORDER.forEach(e => {
+      dist[e] = scoped.filter(v => v.etapa === e).length;
     });
-    return [
-      { name:'No prazo', value:sim, color:'#0A6B34' },
-      { name:'Fora do prazo', value:nao, color:COLORS.red },
-      { name:'Em andamento', value:na, color:COLORS.muted },
-    ].filter(x=>x.value>0);
-  }, [vehicles]);
+    return Object.entries(dist).filter(([_, count]) => count > 0).map(([etapa, count]) => ({
+      name: etapa,
+      value: count,
+      color: etapaMeta(etapa).color
+    }));
+  }, [scoped]);
 
-  const maxEtapa = Math.max(1, ...porEtapa.map(x=>x.qtd));
-  const maxVendedor = Math.max(1, ...porVendedor.map(x=>x.qtd));
-  const totalCump = cumprimento.reduce((a,b)=>a+b.value,0) || 1;
+  const vendedorDistribution = useMemo(() => {
+    if (!isMaster) return [];
+    const dist = {};
+    vehicles.forEach(v => {
+      if (v.vendedor) {
+        dist[v.vendedor] = (dist[v.vendedor] || 0) + 1;
+      }
+    });
+    return Object.entries(dist).sort((a, b) => b[1] - a[1]).map(([vendedor, count]) => ({
+      name: vendedor,
+      value: count
+    }));
+  }, [vehicles, isMaster]);
 
-  if(vehicles.length===0){
-    return (
-      <div className="fade-up card" style={{ padding:50, textAlign:'center' }}>
-        <Icon name="file-spreadsheet" size={34} color={COLORS.muted} />
-        <div style={{ fontWeight:800, fontSize:15, marginTop:14 }}>Nenhum dado carregado ainda</div>
-        <div style={{ fontSize:12, color:COLORS.muted, marginTop:6, fontWeight:600 }}>
-          {role==='master' ? 'Vá em "Upload Planilha" para carregar o Semáforo Operacional.' : 'Aguarde o Master carregar a planilha do Semáforo.'}
-        </div>
-      </div>
-    );
-  }
+  const topEtapas = useMemo(() => {
+    return etapaDistribution.slice(0, 5);
+  }, [etapaDistribution]);
 
   return (
-    <div className="fade-up" style={{ display:'flex', flexDirection:'column', gap:22 }}>
-      <div>
-        <h1 style={{ fontSize:22, fontWeight:800, margin:0, letterSpacing:'-.01em' }}>
-          {role==='comercial' ? `Olá, ${user.nome.split(' ')[0]}` : 'Dashboard de Produção'}
-        </h1>
-        <p style={{ fontSize:12, color:COLORS.muted, margin:'4px 0 0', fontWeight:600 }}>
-          {role==='comercial' ? 'Acompanhamento dos seus veículos em produção' : 'Visão geral de todos os veículos em produção'}
-        </p>
+    <div className="fade-up" style={{ display:'flex', flexDirection:'column', gap:24 }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-end' }}>
+        <div>
+          <h1 style={{ fontSize:28, fontWeight:900, margin:0 }}>Dashboard</h1>
+          <p style={{ fontSize:13, color:COLORS.muted, margin:'6px 0 0', fontWeight:600 }}>
+            {isMaster && selectedVendor !== 'ALL' ? `Visão de ${selectedVendor}` : 'Visão geral da produção'}
+          </p>
+        </div>
+        {isMaster && (
+          <select 
+            className="input" 
+            style={{ width:'auto', padding:'8px 12px', height:36, fontSize:11, textTransform:'uppercase', fontWeight:700 }}
+            value={selectedVendor}
+            onChange={e => setSelectedVendor(e.target.value)}
+          >
+            <option value="ALL">Todos os Vendedores</option>
+            {vendedoresUnicos.map(v => <option key={v} value={v}>{v}</option>)}
+          </select>
+        )}
       </div>
 
-      <div className="kpi-grid" style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:14 }}>
-        <StatCard iconName="car" label="Em Produção" value={kpis.emProducao} accent="#1A4EC2" />
-        <StatCard iconName="check-circle-2" label="Concluídos" value={kpis.concluidos} accent="#0A6B34" />
-        <StatCard iconName="alert-triangle" label="Em Atraso" value={kpis.atrasados} accent={COLORS.red} />
-        <StatCard iconName="package" label="Aguardando Peças" value={kpis.aguardandoPecas} accent="#B45309" />
-        <StatCard iconName="file-text" label="Aguardando Vidros" value={kpis.aguardandoVidros} accent="#1A4EC2" />
-        <StatCard iconName="shield-check" label="Aguardando AT" value={kpis.aguardandoAt} accent="#7E22CE" />
+      <div className="kpi-grid" style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:16 }}>
+        <StatCard iconName="package" label="Total de Veículos" value={total} accent={COLORS.red} />
+        <StatCard iconName="check-circle-2" label="Entregues" value={entregues} sub={`${taxaEntrega}%`} accent="#0A6B34" />
+        <StatCard iconName="wrench" label="Em Produção" value={emProducao} accent="#0369A1" />
+        <StatCard iconName="alert-circle" label="Atrasados" value={atrasados} accent="#C2410C" />
       </div>
 
-      <div className="chart-grid" style={{ display:'grid', gridTemplateColumns:'1.3fr 1fr', gap:14 }}>
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16 }}>
         <div className="card" style={{ padding:20 }}>
-          <div style={{ fontSize:11, fontWeight:800, textTransform:'uppercase', letterSpacing:'.06em', color:COLORS.muted, marginBottom:16 }}>Distribuição por Etapa</div>
+          <div style={{ fontSize:12, fontWeight:800, textTransform:'uppercase', color:COLORS.muted, marginBottom:16, letterSpacing:'.05em' }}>Status dos Prazos</div>
+          <div style={{ display:'flex', gap:12, alignItems:'flex-end', height:120 }}>
+            <div style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', gap:8 }}>
+              <div style={{ width:'100%', height:noVerde > 0 ? `${Math.max(20, (noVerde/Math.max(noVerde, noAmarelo, atrasados, 1)) * 100)}%` : 0, background:'#0A6B34', borderRadius:6, transition:'all .3s' }} />
+              <div style={{ fontSize:11, fontWeight:700, color:'#0A6B34' }}>No Prazo</div>
+              <div style={{ fontSize:14, fontWeight:900 }}>{noVerde}</div>
+            </div>
+            <div style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', gap:8 }}>
+              <div style={{ width:'100%', height:noAmarelo > 0 ? `${Math.max(20, (noAmarelo/Math.max(noVerde, noAmarelo, atrasados, 1)) * 100)}%` : 0, background:'#FFA500', borderRadius:6, transition:'all .3s' }} />
+              <div style={{ fontSize:11, fontWeight:700, color:'#FFA500' }}>Crítico</div>
+              <div style={{ fontSize:14, fontWeight:900 }}>{noAmarelo}</div>
+            </div>
+            <div style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', gap:8 }}>
+              <div style={{ width:'100%', height:atrasados > 0 ? `${Math.max(20, (atrasados/Math.max(noVerde, noAmarelo, atrasados, 1)) * 100)}%` : 0, background:'#DC1F1F', borderRadius:6, transition:'all .3s' }} />
+              <div style={{ fontSize:11, fontWeight:700, color:'#DC1F1F' }}>Atrasado</div>
+              <div style={{ fontSize:14, fontWeight:900 }}>{atrasados}</div>
+            </div>
+          </div>
+        </div>
+
+        <div className="card" style={{ padding:20 }}>
+          <div style={{ fontSize:12, fontWeight:800, textTransform:'uppercase', color:COLORS.muted, marginBottom:16, letterSpacing:'.05em' }}>KPIs Principais</div>
+          <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
+            <div>
+              <div style={{ fontSize:11, fontWeight:700, color:COLORS.muted, marginBottom:4 }}>Taxa de Entrega</div>
+              <div style={{ fontSize:18, fontWeight:900, color:COLORS.red }}>{taxaEntrega}%</div>
+            </div>
+            <div>
+              <div style={{ fontSize:11, fontWeight:700, color:COLORS.muted, marginBottom:4 }}>Lead Time Médio</div>
+              <div style={{ fontSize:18, fontWeight:900, color:COLORS.ink }}>{leadTimeMedia} dias</div>
+            </div>
+            <div>
+              <div style={{ fontSize:11, fontWeight:700, color:COLORS.muted, marginBottom:4 }}>Taxa de Atraso</div>
+              <div style={{ fontSize:18, fontWeight:900, color:COLORS.red }}>{total > 0 ? Math.round((atrasados / total) * 100) : 0}%</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16 }}>
+        <div className="card" style={{ padding:20 }}>
+          <div style={{ fontSize:12, fontWeight:800, textTransform:'uppercase', color:COLORS.muted, marginBottom:16, letterSpacing:'.05em' }}>Top 5 Etapas</div>
           <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
-            {porEtapa.map(({etapa,qtd}) => {
-              const m = etapaMeta(etapa);
-              return (
-                <div key={etapa} style={{ display:'flex', alignItems:'center', gap:10 }}>
-                  <div style={{ width:96, fontSize:9.5, fontWeight:800, color:COLORS.muted, textTransform:'uppercase', letterSpacing:'.04em', flexShrink:0 }}>{etapa}</div>
-                  <div style={{ flex:1, background:COLORS.smoke, borderRadius:6, height:16, overflow:'hidden' }}>
-                    <div style={{ width:`${(qtd/maxEtapa)*100}%`, height:'100%', background:m.color, borderRadius:6, transition:'width .4s' }} />
+            {topEtapas.map((etapa, i) => (
+              <div key={i} style={{ display:'flex', alignItems:'center', gap:10 }}>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:11, fontWeight:700, marginBottom:4 }}>{etapa.name}</div>
+                  <div style={{ width:'100%', height:6, background:COLORS.smoke, borderRadius:3, overflow:'hidden' }}>
+                    <div style={{ width:`${total > 0 ? (etapa.value/total)*100 : 0}%`, height:'100%', background:etapa.color, transition:'all .3s' }} />
                   </div>
-                  <div style={{ width:26, fontSize:11.5, fontWeight:800, textAlign:'right' }}>{qtd}</div>
                 </div>
-              );
-            })}
+                <div style={{ fontSize:12, fontWeight:800, minWidth:30, textAlign:'right' }}>{etapa.value}</div>
+              </div>
+            ))}
           </div>
         </div>
 
-        <div className="card" style={{ padding:20 }}>
-          <div style={{ fontSize:11, fontWeight:800, textTransform:'uppercase', letterSpacing:'.06em', color:COLORS.muted, marginBottom:16 }}>Cumprimento de Prazo</div>
-          <div style={{ display:'flex', alignItems:'center', justifyContent:'center', margin:'8px 0 18px' }}>
-            <svg width="140" height="140" viewBox="0 0 140 140">
-              <circle cx="70" cy="70" r="55" fill="none" stroke={COLORS.smoke} strokeWidth="18" />
-              {(() => {
-                let acc = 0;
-                const circ = 2*Math.PI*55;
-                return cumprimento.map((seg,i) => {
-                  const frac = seg.value/totalCump;
-                  const dash = frac*circ;
-                  const el = (
-                    <circle key={i} cx="70" cy="70" r="55" fill="none" stroke={seg.color} strokeWidth="18"
-                      strokeDasharray={`${dash} ${circ-dash}`} strokeDashoffset={-acc*circ}
-                      transform="rotate(-90 70 70)" strokeLinecap="butt" />
-                  );
-                  acc += frac;
-                  return el;
-                });
-              })()}
-              <text x="70" y="65" textAnchor="middle" fontSize="22" fontWeight="800" fill={COLORS.ink}>{totalCump}</text>
-              <text x="70" y="82" textAnchor="middle" fontSize="8" fontWeight="700" fill={COLORS.muted} letterSpacing=".05em">VEÍCULOS</text>
-            </svg>
+        {isMaster && vendedorDistribution.length > 0 && (
+          <div className="card" style={{ padding:20 }}>
+            <div style={{ fontSize:12, fontWeight:800, textTransform:'uppercase', color:COLORS.muted, marginBottom:16, letterSpacing:'.05em' }}>Distribuição por Vendedor</div>
+            <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+              {vendedorDistribution.slice(0, 5).map((vend, i) => (
+                <div key={i} style={{ display:'flex', alignItems:'center', gap:10 }}>
+                  <div style={{ flex:1 }}>
+                    <div style={{ fontSize:11, fontWeight:700, marginBottom:4 }}>{vend.name}</div>
+                    <div style={{ width:'100%', height:6, background:COLORS.smoke, borderRadius:3, overflow:'hidden' }}>
+                      <div style={{ width:`${vehicles.length > 0 ? (vend.value/vehicles.length)*100 : 0}%`, height:'100%', background:COLORS.red, transition:'all .3s' }} />
+                    </div>
+                  </div>
+                  <div style={{ fontSize:12, fontWeight:800, minWidth:30, textAlign:'right' }}>{vend.value}</div>
+                </div>
+              ))}
+            </div>
           </div>
-          <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
-            {cumprimento.map(seg => (
-              <div key={seg.name} style={{ display:'flex', alignItems:'center', gap:8, fontSize:10.5, fontWeight:700 }}>
-                <span style={{ width:9, height:9, borderRadius:3, background:seg.color, flexShrink:0 }} />
-                <span style={{ flex:1, color:COLORS.ink }}>{seg.name}</span>
-                <span style={{ color:COLORS.muted }}>{seg.value}</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   DRAWER DE VEÍCULO
+   ============================================================ */
+function VehicleDrawer({ vehicle, onClose, role }){
+  const fields = [
+    { label:'OS', key:'os' },
+    { label:'Cliente', key:'cliente' },
+    { label:'Modelo', key:'modelo' },
+    { label:'Chassi', key:'chassi' },
+    { label:'Cor', key:'cor' },
+    { label:'Vendedor', key:'vendedor' },
+    { label:'Etapa', key:'etapa' },
+    { label:'Data Entrada', key:'dataEntrada' },
+    { label:'Data Desmontagem', key:'dataDesmontagem' },
+    { label:'Data Kit Vidro', key:'dataKitVidro' },
+    { label:'Data AT', key:'dataAt' },
+    { label:'Observações', key:'observacoes' },
+  ];
+
+  return (
+    <div style={{ position:'fixed', inset:0, zIndex:200, display:'flex', alignItems:'flex-end' }}>
+      <div className="fade-in" onClick={onClose} style={{ position:'absolute', inset:0, background:'rgba(13,13,13,.3)' }} />
+      <div className="fade-up card" style={{ position:'relative', width:'100%', maxWidth:420, borderRadius:'20px 20px 0 0', maxHeight:'85vh', display:'flex', flexDirection:'column' }}>
+        <div style={{ padding:'20px 24px', borderBottom:`1px solid ${COLORS.border}`, display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+          <div style={{ fontSize:14, fontWeight:800, textTransform:'uppercase', letterSpacing:'.05em' }}>Detalhes do Veículo</div>
+          <button onClick={onClose} style={{ background:'none', border:'none', cursor:'pointer', color:COLORS.muted }}><Icon name="x" size={20}/></button>
+        </div>
+        <div className="scroll-y" style={{ flex:1, padding:'20px 24px', display:'flex', flexDirection:'column', gap:18 }}>
+          {fields.map(f => (
+            <div key={f.key}>
+              <div style={{ fontSize:9, fontWeight:800, textTransform:'uppercase', color:COLORS.muted, marginBottom:6, letterSpacing:'.05em' }}>{f.label}</div>
+              <div style={{ fontSize:13, fontWeight:600, color:COLORS.ink }}>
+                {f.key==='etapa' ? <EtapaBadge etapa={vehicle[f.key]} /> : (
+                  f.key.toLowerCase().includes('data') ? fmtDate(vehicle[f.key]) : (vehicle[f.key] ?? '—')
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   TABELA GENÉRICA
+   ============================================================ */
+function GenericTableView({ vehicles, role, title, subtitle, columns, initialExportCols, showVendorFilter }){
+  const [q, setQ] = useState('');
+  const [selectedEtapas, setSelectedEtapas] = useState(null);
+  const [selectedVendor, setSelectedVendor] = useState('ALL');
+  const [selected, setSelected] = useState(null);
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [exportCols, setExportCols] = useState(initialExportCols);
+
+  const etapasPresentes = useMemo(() => {
+    const etapas = [...new Set(vehicles.map(v=>v.etapa).filter(Boolean))];
+    return ETAPAS_ORDER.filter(e => etapas.includes(e));
+  }, [vehicles]);
+
+  useEffect(() => {
+    if (selectedEtapas === null && etapasPresentes.length > 0) {
+      setSelectedEtapas(etapasPresentes.filter(e => e !== 'ENTREGUE'));
+    }
+  }, [etapasPresentes]);
+
+  const toggleEtapa = (e) => {
+    setSelectedEtapas(prev => {
+      const current = prev || [];
+      return current.includes(e) ? current.filter(x=>x!==e) : [...current, e];
+    });
+  };
+
+  const vendedoresPresentes = useMemo(() => {
+    return [...new Set(vehicles.map(v=>v.vendedor).filter(Boolean))].sort();
+  }, [vehicles]);
+
+  const filtered = useMemo(() => {
+    let result = vehicles;
+    
+    if(selectedVendor !== 'ALL'){
+      result = result.filter(v => v.vendedor === selectedVendor);
+    }
+
+    if(selectedEtapas !== null){
+      result = result.filter(v => selectedEtapas.includes(v.etapa));
+    }
+
+    if(q.trim()){
+      const qLower = q.toLowerCase();
+      result = result.filter(v => 
+        String(v.os).includes(qLower) ||
+        (v.cliente||'').toLowerCase().includes(qLower) ||
+        (v.modelo||'').toLowerCase().includes(qLower) ||
+        (v.chassi||'').toLowerCase().includes(qLower)
+      );
+    }
+
+    return result;
+  }, [vehicles, q, selectedEtapas, selectedVendor]);
+
+  const exportExcel = () => {
+    const data = filtered.map(v => {
+      const row = {};
+      exportCols.forEach(key => {
+        if(key === 'etapa') row[key] = v[key];
+        else if(key.toLowerCase().includes('data') || key === 'prazo' || key === 'previsaoEntrega') row[key] = fmtDate(v[key]);
+        else row[key] = v[key] ?? '';
+      });
+      return row;
+    });
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Dados');
+    XLSX.writeFile(wb, `${title.replace(/\s+/g,'_')}_${new Date().toISOString().slice(0,10)}.xlsx`);
+    setShowExportModal(false);
+  };
+
+  const exportPDF = () => {
+    const doc = new jsPDF.jsPDF();
+    const headers = exportCols.map(c => columns.find(col=>col.key===c)?.label || c);
+    const rows = filtered.map(v => exportCols.map(key => {
+      if(key === 'etapa') return v[key];
+      else if(key.toLowerCase().includes('data') || key === 'prazo' || key === 'previsaoEntrega') return fmtDate(v[key]);
+      else return v[key] ?? '';
+    }));
+    doc.autoTable({ head: [headers], body: rows, startY: 20 });
+    doc.text(title, 14, 10);
+    const title2 = `${title.replace(/\s+/g,'_')}_${new Date().toISOString().slice(0,10)}`;
+    doc.save(title2 + '.pdf');
+  };
+
+  return (
+    <div className="fade-up" style={{ display:'flex', flexDirection:'column', gap:16, height:'100%' }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-end' }}>
+        <div>
+          <h1 style={{ fontSize:22, fontWeight:800, margin:0 }}>{title}</h1>
+          <p style={{ fontSize:12, color:COLORS.muted, margin:'4px 0 0', fontWeight:600 }}>{subtitle}</p>
+        </div>
+        <button className="btn-primary" onClick={()=>setShowExportModal(true)}>
+          <Icon name="download" size={14} /> Exportar
+        </button>
+      </div>
+
+      <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
+        <div style={{ position:'relative' }}>
+          <div style={{ position:'absolute', left:12, top:'50%', transform:'translateY(-50%)', color:COLORS.muted }}><Icon name="search" size={15}/></div>
+          <input className="input" style={{ paddingLeft:38 }} placeholder="Buscar..." value={q} onChange={e=>setQ(e.target.value)} />
+        </div>
+        
+        <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+          {showVendorFilter && vendedoresPresentes.length > 0 && (
+            <div style={{ display:'flex', gap:8, flexWrap:'wrap', alignItems:'center' }}>
+              <div style={{ fontSize:10, fontWeight:800, textTransform:'uppercase', color:COLORS.muted, marginRight:4 }}>Vendedor:</div>
+              <select 
+                className="input" 
+                style={{ width:'auto', padding:'4px 10px', height:28, fontSize:10, textTransform:'uppercase' }}
+                value={selectedVendor}
+                onChange={e => setSelectedVendor(e.target.value)}
+              >
+                <option value="ALL">Todos os Vendedores</option>
+                {vendedoresPresentes.map(v => <option key={v} value={v}>{v}</option>)}
+              </select>
+            </div>
+          )}
+
+          <div style={{ display:'flex', gap:8, flexWrap:'wrap', alignItems:'center' }}>
+            <div style={{ fontSize:10, fontWeight:800, textTransform:'uppercase', color:COLORS.muted, marginRight:4 }}>Filtrar Etapas:</div>
+            {etapasPresentes.map(e => (
+              <div key={e} className={`filter-chip ${(selectedEtapas||[]).includes(e)?'active':''}`} onClick={()=>toggleEtapa(e)}>
+                {e}
               </div>
             ))}
+            {selectedEtapas && selectedEtapas.length > 0 && (
+              <button onClick={()=>setSelectedEtapas([])} style={{ background:'none', border:'none', color:COLORS.red, fontSize:10, fontWeight:800, cursor:'pointer', textTransform:'uppercase' }}>Limpar Tudo</button>
+            )}
+            {selectedEtapas && selectedEtapas.length < etapasPresentes.length && (
+              <button onClick={()=>setSelectedEtapas(etapasPresentes)} style={{ background:'none', border:'none', color:COLORS.red, fontSize:10, fontWeight:800, cursor:'pointer', textTransform:'uppercase', marginLeft:8 }}>Selecionar Tudo</button>
+            )}
           </div>
         </div>
       </div>
 
-      {role!=='comercial' && (
-        <div className="card" style={{ padding:20 }}>
-          <div style={{ fontSize:11, fontWeight:800, textTransform:'uppercase', letterSpacing:'.06em', color:COLORS.muted, marginBottom:16 }}>Distribuição por Vendedor</div>
-          <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
-            {porVendedor.map(({nome,qtd}) => (
-              <div key={nome} style={{ display:'flex', alignItems:'center', gap:10 }}>
-                <div style={{ width:130, fontSize:10.5, fontWeight:700, color:COLORS.ink, flexShrink:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{nome}</div>
-                <div style={{ flex:1, background:COLORS.smoke, borderRadius:6, height:14, overflow:'hidden' }}>
-                  <div style={{ width:`${(qtd/maxVendedor)*100}%`, height:'100%', background:COLORS.red, borderRadius:6, transition:'width .4s' }} />
-                </div>
-                <div style={{ width:24, fontSize:11, fontWeight:800, textAlign:'right' }}>{qtd}</div>
-              </div>
+      <div className="table-container scroll-y">
+        <table className="vtable" style={{ width:'100%', borderCollapse:'collapse' }}>
+          <thead>
+            <tr>
+              {columns.filter(c=>c.default).map(c => <th key={c.key}>{c.label}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map(v => (
+              <tr key={v.os} onClick={()=>setSelected(v)}>
+                {columns.filter(c=>c.default).map(c => (
+                  <td key={c.key} style={c.key==='os'?{fontWeight:800}:{}}>
+                    {c.key==='etapa' ? <EtapaBadge etapa={v[c.key]} /> : (
+                      c.key==='dias' ? (
+                        <div style={{display:'flex', alignItems:'center', gap:8}}>
+                          <div style={{
+                            width:10, height:10, borderRadius:'50%',
+                            background: v[c.key] < 0 ? '#DC1F1F' : (v[c.key] === 0 ? '#FFA500' : '#0A6B34'),
+                            flexShrink:0
+                          }} />
+                          <span>{v[c.key] != null ? v[c.key] : '—'}</span>
+                        </div>
+                      ) : (
+                        c.key==='leadTime' ? (v[c.key] != null ? Math.round(Number(v[c.key])) : '—') :
+                        (c.key.toLowerCase().includes('data') || c.key==='prazo' || c.key==='previsaoEntrega' || c.key==='dataContratual' || c.key==='dataIndicativa' ? fmtDate(v[c.key]) : (v[c.key] ?? '—'))
+                      )
+                    )}
+                  </td>
+                ))}
+              </tr>
             ))}
+            {filtered.length===0 && (
+              <tr><td colSpan={columns.filter(c=>c.default).length} style={{ textAlign:'center', padding:30, color:COLORS.muted, fontWeight:700 }}>Nenhum veículo encontrado.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ fontSize:10.5, fontWeight:700, color:COLORS.muted }}>{filtered.length} veículo(s) exibido(s)</div>
+
+      {selected && <VehicleDrawer vehicle={selected} onClose={()=>setSelected(null)} role={role} />}
+
+      {showExportModal && (
+        <Modal title="Exportar Informações" onClose={()=>setShowExportModal(false)}>
+          <div style={{ display:'flex', flexDirection:'column', gap:20 }}>
+            <div>
+              <div style={{ fontSize:11, fontWeight:800, textTransform:'uppercase', color:COLORS.muted, marginBottom:12 }}>Selecione as colunas desejadas:</div>
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+                {columns.map(c => (
+                  <label key={c.key} style={{ display:'flex', alignItems:'center', gap:8, cursor:'pointer', fontSize:12, fontWeight:600 }}>
+                    <input type="checkbox" checked={exportCols.includes(c.key)} onChange={()=>{
+                      setExportCols(prev => prev.includes(c.key) ? prev.filter(x=>x!==c.key) : [...prev, c.key]);
+                    }} />
+                    {c.label}
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div style={{ display:'flex', gap:10 }}>
+              <button className="btn-ghost" style={{ flex:1 }} onClick={exportExcel}><Icon name="file-spreadsheet" size={14}/> Excel</button>
+              <button className="btn-ghost" style={{ flex:1 }} onClick={exportPDF}><Icon name="file-text" size={14}/> PDF</button>
+            </div>
           </div>
-        </div>
+        </Modal>
       )}
     </div>
   );
 }
 
-/* ============================================================
-   FICHA DO VEÍCULO (drawer)
-   ============================================================ */
-function VehicleDrawer({ vehicle, onClose, role }){
-  if(!vehicle) return null;
-  const Row = ({ iconName, label, value }) => (
-    <div style={{ display:'flex', alignItems:'flex-start', gap:10, padding:'10px 0', borderBottom:`1px solid ${COLORS.smoke}` }}>
-      <div style={{ width:26, height:26, borderRadius:7, background:COLORS.smoke, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0, marginTop:1 }}>
-        <Icon name={iconName} size={12} color={COLORS.muted} />
-      </div>
-      <div style={{ minWidth:0 }}>
-        <div style={{ fontSize:8.5, fontWeight:800, textTransform:'uppercase', letterSpacing:'.06em', color:COLORS.muted }}>{label}</div>
-        <div style={{ fontSize:12.5, fontWeight:700, color:COLORS.ink, marginTop:2, wordBreak:'break-word' }}>{value || '—'}</div>
-      </div>
-    </div>
-  );
-  return (
-    <div style={{ position:'fixed', inset:0, zIndex:200, display:'flex', justifyContent:'flex-end' }}>
-      <div className="fade-in" onClick={onClose} style={{ position:'absolute', inset:0, background:'rgba(13,13,13,.5)' }} />
-      <div className="fade-up" style={{ position:'relative', width:'min(420px,100%)', height:'100%', background:'#fff', boxShadow:'-20px 0 60px rgba(0,0,0,.2)', display:'flex', flexDirection:'column' }}>
-        <div style={{ padding:'22px 22px 18px', borderBottom:`1px solid ${COLORS.border}`, background:COLORS.ink, color:'#fff', position:'relative' }}>
-          <button onClick={onClose} style={{ position:'absolute', top:16, right:16, background:'rgba(255,255,255,.1)', border:'none', borderRadius:8, width:28, height:28, display:'flex', alignItems:'center', justifyContent:'center', color:'#fff', cursor:'pointer' }}><Icon name="x" size={15}/></button>
-          <div style={{ fontSize:9, fontWeight:800, textTransform:'uppercase', letterSpacing:'.1em', color:'rgba(255,255,255,.4)' }}>OS #{vehicle.os}</div>
-          <div style={{ fontSize:20, fontWeight:800, marginTop:4 }}>{vehicle.fabricante} {vehicle.modelo}</div>
-          <div style={{ marginTop:10 }}><EtapaBadge etapa={vehicle.etapa} /></div>
-        </div>
-        <div className="scroll-y" style={{ flex:1, padding:'6px 22px 22px' }}>
-          <Row iconName="user" label="Cliente" value={vehicle.cliente} />
-          <Row iconName="building-2" label="Parceiro" value={vehicle.parceiro} />
-          <Row iconName="users" label="Vendedor" value={vehicle.vendedor} />
-          <Row iconName="palette" label="Cor" value={vehicle.cor} />
-          <Row iconName="hash" label="Chassi" value={vehicle.chassi} />
-          <Row iconName="map-pin" label="Localização" value={vehicle.localizacao} />
-          <Row iconName="calendar" label="Data de Entrada" value={fmtDate(vehicle.dataEntrada)} />
-          <Row iconName="calendar" label="Data Desmontagem" value={fmtDate(vehicle.dataDesmontagem)} />
-          <Row iconName="calendar" label="Data Kit Vidro" value={fmtDate(vehicle.dataKitVidro)} />
-          <Row iconName="calendar" label="Data AT" value={fmtDate(vehicle.dataAt)} />
-          <Row iconName="calendar" label="Prazo" value={fmtDate(vehicle.prazo)} />
-          <Row iconName="calendar" label="Previsão de Entrega" value={fmtDate(vehicle.previsaoEntrega)} />
-          {vehicle.dataEntrega && <Row iconName="check-circle-2" label="Data de Entrega" value={fmtDate(vehicle.dataEntrega)} />}
-          {role!=='comercial' && <Row iconName="wrench" label="DB (Documentação Blindagem)" value={vehicle.db} />}
-          <Row iconName="clock" label="Dias (prazo)" value={vehicle.dias!=null ? vehicle.dias : '—'} />
-          {vehicle.cumprimentoPrazo && <Row iconName="shield-check" label="Cumprimento de Prazo" value={vehicle.cumprimentoPrazo} />}
-          <Row iconName="alert-circle" label="Observações" value={vehicle.observacoes} />
-        </div>
-      </div>
-    </div>
-  );
+const COL_OPERACIONAL = [
+  { key:'os', label:'OS', default:true },
+  { key:'vendedor', label:'Vendedor', default:true },
+  { key:'cliente', label:'Cliente', default:true },
+  { key:'parceiro', label:'Parceiro', default:true },
+  { key:'modelo', label:'Modelo', default:true },
+  { key:'fabricante', label:'Fabricante', default:true },
+  { key:'cor', label:'Cor', default:true },
+  { key:'chassi', label:'Chassi', default:true },
+  { key:'dataEntrada', label:'Data Entrada', default:true },
+  { key:'dataDesmontagem', label:'Data Desmontagem', default:true },
+  { key:'dataKitVidro', label:'Data Kit Vidro', default:true },
+  { key:'dataAt', label:'Data AT', default:true },
+  { key:'db', label:'DB', default:true },
+  { key:'etapa', label:'Etapa', default:true },
+  { key:'localizacao', label:'Localização', default:true },
+  { key:'observacoes', label:'Observações', default:true },
+  { key:'prazo', label:'Prazo', default:true },
+  { key:'previsaoEntrega', label:'Previsão Entrega', default:true },
+  { key:'dias', label:'Dias', default:true },
+  { key:'dataEntrega', label:'Data Entrega', default:true },
+  { key:'leadTime', label:'Lead Time Produção', default:true },
+  { key:'cumprimentoPrazo', label:'Cumprimento de Prazos', default:true },
+];
+
+const COL_COMERCIAL = [
+  { key:'os', label:'OS', default:true },
+  { key:'fabricante', label:'Marca', default:true },
+  { key:'modelo', label:'Modelo', default:true },
+  { key:'chassi', label:'Chassi', default:true },
+  { key:'cor', label:'Cor', default:true },
+  { key:'cliente', label:'Cliente', default:true },
+  { key:'dataEntrada', label:'Data Entrada', default:true },
+  { key:'dataAt', label:'Data Aut. Exército', default:true },
+  { key:'dataKitVidro', label:'Data Vidros', default:true },
+  { key:'dataContratual', label:'Data Contratual', default:true },
+  { key:'dataIndicativa', label:'Data Indicativa', default:true },
+  { key:'dias', label:'Dias', default:true },
+  { key:'etapa', label:'Status', default:true },
+  { key:'observacoes', label:'Observações', default:true },
+];
+
+function OperacionalView({ vehicles, role }){
+  return <GenericTableView 
+    vehicles={vehicles} 
+    role={role} 
+    title="Visão Operacional" 
+    subtitle="Gestão detalhada da produção e blindagem" 
+    columns={COL_OPERACIONAL} 
+    initialExportCols={COL_OPERACIONAL.map(c=>c.key)}
+  />;
 }
 
-/* ============================================================
-   PESQUISA / VEÍCULOS
-   ============================================================ */
-function SearchView({ vehicles, role }){
-  const [q, setQ] = useState('');
-  const [etapaFilter, setEtapaFilter] = useState('');
-  const [selected, setSelected] = useState(null);
-
-  const filtered = useMemo(() => {
-    let list = vehicles;
-    if(etapaFilter) list = list.filter(v=>v.etapa===etapaFilter);
-    if(q.trim()){
-      const t = q.trim().toLowerCase();
-      list = list.filter(v =>
-        String(v.os).includes(t) ||
-        (v.chassi||'').toLowerCase().includes(t) ||
-        (v.cliente||'').toLowerCase().includes(t) ||
-        (v.vendedor||'').toLowerCase().includes(t) ||
-        (v.modelo||'').toLowerCase().includes(t) ||
-        (v.fabricante||'').toLowerCase().includes(t)
-      );
-    }
-    return list.slice(0, 300);
-  }, [vehicles, q, etapaFilter]);
-
-  const etapasPresentes = useMemo(() => ETAPAS_ORDER.filter(e => vehicles.some(v=>v.etapa===e)), [vehicles]);
-
-  return (
-    <div className="fade-up" style={{ display:'flex', flexDirection:'column', gap:16 }}>
-      <div>
-        <h1 style={{ fontSize:22, fontWeight:800, margin:0 }}>Veículos</h1>
-        <p style={{ fontSize:12, color:COLORS.muted, margin:'4px 0 0', fontWeight:600 }}>Pesquise por OS, chassi, cliente, vendedor ou modelo</p>
-      </div>
-
-      <div style={{ display:'flex', gap:10, flexWrap:'wrap' }}>
-        <div style={{ position:'relative', flex:'1 1 260px' }}>
-          <div style={{ position:'absolute', left:12, top:'50%', transform:'translateY(-50%)', color:COLORS.muted }}><Icon name="search" size={15}/></div>
-          <input className="input" style={{ paddingLeft:38 }} placeholder="Buscar por OS, chassi, cliente, vendedor, modelo..." value={q} onChange={e=>setQ(e.target.value)} />
-        </div>
-        <select className="input" style={{ maxWidth:200 }} value={etapaFilter} onChange={e=>setEtapaFilter(e.target.value)}>
-          <option value="">Todas as etapas</option>
-          {etapasPresentes.map(e => <option key={e} value={e}>{e}</option>)}
-        </select>
-      </div>
-
-      <div className="card" style={{ overflow:'auto' }}>
-        <table className="vtable" style={{ width:'100%', borderCollapse:'collapse' }}>
-          <thead>
-            <tr>
-              <th>OS</th><th>Modelo</th><th>Cor</th><th>Cliente</th><th>Vendedor</th><th>Etapa</th><th>Prazo</th><th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map(v => (
-              <tr key={v.os} onClick={()=>setSelected(v)}>
-                <td style={{ fontWeight:800 }}>{v.os}</td>
-                <td>{v.fabricante} {v.modelo}</td>
-                <td>{v.cor||'—'}</td>
-                <td style={{ maxWidth:180, overflow:'hidden', textOverflow:'ellipsis' }}>{v.cliente||'—'}</td>
-                <td>{v.vendedor||'—'}</td>
-                <td><EtapaBadge etapa={v.etapa} /></td>
-                <td>{fmtDate(v.prazo)}</td>
-                <td><Icon name="chevron-right" size={14} color={COLORS.muted} /></td>
-              </tr>
-            ))}
-            {filtered.length===0 && (
-              <tr><td colSpan={8} style={{ textAlign:'center', padding:30, color:COLORS.muted, fontWeight:700 }}>Nenhum veículo encontrado.</td></tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-      <div style={{ fontSize:10.5, fontWeight:700, color:COLORS.muted }}>{filtered.length} veículo(s) exibido(s) {filtered.length===300 && '(resultado limitado a 300 — refine a busca)'}</div>
-
-      {selected && <VehicleDrawer vehicle={selected} onClose={()=>setSelected(null)} role={role} />}
-    </div>
-  );
-}
-
-/* ============================================================
-   VISÃO COMERCIAL — gerada automaticamente a partir do Operacional
-   ============================================================ */
 function ComercialView({ vehicles, role, user }){
-  const [q, setQ] = useState('');
-  const [selected, setSelected] = useState(null);
+  const isMaster = role === 'master';
+  
+  const vehiclesWithComercial = vehicles.map(v => ({
+    ...v,
+    dataContratual: calculateDataContratual(v.dataAt, v.dataKitVidro),
+    dataIndicativa: v.previsaoEntrega,
+  }));
 
-  const base = role==='comercial' ? vehicles.filter(v=>v.vendedor===user.vendedor) : vehicles;
-  const filtered = useMemo(() => {
-    if(!q.trim()) return base.slice(0,300);
-    const t=q.trim().toLowerCase();
-    return base.filter(v => String(v.os).includes(t) || (v.cliente||'').toLowerCase().includes(t) || (v.modelo||'').toLowerCase().includes(t)).slice(0,300);
-  }, [base, q]);
-
-  return (
-    <div className="fade-up" style={{ display:'flex', flexDirection:'column', gap:16 }}>
-      <div>
-        <h1 style={{ fontSize:22, fontWeight:800, margin:0 }}>{role==='comercial' ? 'Meus Veículos' : 'Visão Comercial'}</h1>
-        <p style={{ fontSize:12, color:COLORS.muted, margin:'4px 0 0', fontWeight:600 }}>
-          Gerada automaticamente a partir do Semáforo Operacional{role==='comercial' ? ` — vendedor: ${user.vendedor}` : ''}
-        </p>
-      </div>
-      <div style={{ position:'relative', maxWidth:420 }}>
-        <div style={{ position:'absolute', left:12, top:'50%', transform:'translateY(-50%)', color:COLORS.muted }}><Icon name="search" size={15}/></div>
-        <input className="input" style={{ paddingLeft:38 }} placeholder="Buscar OS, cliente ou modelo..." value={q} onChange={e=>setQ(e.target.value)} />
-      </div>
-      <div className="card" style={{ overflow:'auto' }}>
-        <table className="vtable" style={{ width:'100%', borderCollapse:'collapse' }}>
-          <thead>
-            <tr>
-              <th>OS</th><th>Modelo</th><th>Cor</th><th>Cliente</th><th>Data Entrada</th><th>Data AT</th><th>Data Vidro</th><th>Status</th><th>Prazo</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map(v => (
-              <tr key={v.os} onClick={()=>setSelected(v)}>
-                <td style={{ fontWeight:800 }}>{v.os}</td>
-                <td>{v.fabricante} {v.modelo}</td>
-                <td>{v.cor||'—'}</td>
-                <td style={{ maxWidth:170, overflow:'hidden', textOverflow:'ellipsis' }}>{v.cliente||'—'}</td>
-                <td>{fmtDate(v.dataEntrada)}</td>
-                <td>{fmtDate(v.dataAt)}</td>
-                <td>{fmtDate(v.dataKitVidro)}</td>
-                <td><EtapaBadge etapa={v.etapa} /></td>
-                <td>{fmtDate(v.prazo)}</td>
-              </tr>
-            ))}
-            {filtered.length===0 && (
-              <tr><td colSpan={9} style={{ textAlign:'center', padding:30, color:COLORS.muted, fontWeight:700 }}>Nenhum veículo encontrado.</td></tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-      {selected && <VehicleDrawer vehicle={selected} onClose={()=>setSelected(null)} role={role} />}
-    </div>
-  );
+  const base = role==='comercial' ? vehiclesWithComercial.filter(v=>v.vendedor===user.vendedor) : vehiclesWithComercial;
+  
+  return <GenericTableView 
+    vehicles={base} 
+    role={role} 
+    title="Visão Comercial" 
+    subtitle={`Acompanhamento de vendas e prazos${role==='comercial' ? ' — vendedor: '+user.vendedor : ''}`} 
+    columns={COL_COMERCIAL} 
+    initialExportCols={COL_COMERCIAL.map(c=>c.key)}
+    showVendorFilter={isMaster}
+  />;
 }
 
 /* ============================================================
-   CONSULTA INTELIGENTE (local, sem dependência externa)
+   CONSULTA INTELIGENTE
    ============================================================ */
 function findRelevantVehicles(question, vehicles){
   const q = question.toUpperCase();
@@ -738,61 +872,31 @@ function composeAnswer(question, scoped){
   const countAtraso = scoped.filter(v=>v.etapa!=='ENTREGUE' && v.dias!=null && v.dias<0).length;
   const countVidro = scoped.filter(v=>v.etapa==='VIDRO').length;
   const countEntregue = scoped.filter(v=>v.etapa==='ENTREGUE').length;
-  const countPecas = scoped.filter(v=>{
-    const o=(v.observacoes||'').toUpperCase();
-    return o.includes('PENDÊNCIA DE PEÇAS')||o.includes('PENDENCIA DE PEÇAS');
-  }).length;
 
   if(/quant[oa]s/.test(qlc)){
     if(qlc.includes('atraso')) return `Atualmente há ${countAtraso} veículo(s) em atraso, de um total de ${total}.`;
-    if(qlc.includes('vidro')) return `${countVidro} veículo(s) estão aguardando vidro no momento.`;
-    if(qlc.includes('entreg')) return `${countEntregue} veículo(s) já foram entregues, de um total de ${total} cadastrados.`;
-    if(qlc.includes('peça')||qlc.includes('peca')) return `${countPecas} veículo(s) estão com pendência de peças registrada.`;
-    return `No total, ${total} veículo(s) estão cadastrados neste painel.`;
+    if(qlc.includes('vidro')) return `${countVidro} veículo(s) estão na etapa de VIDRO no momento.`;
+    if(qlc.includes('entreg')) return `${countEntregue} veículo(s) já foram entregues.`;
+    return `No total, ${total} veículo(s) estão cadastrados.`;
   }
 
   const relevant = findRelevantVehicles(question, scoped);
-  if(relevant.length===0){
-    return 'Não encontrei nenhum veículo com esses dados. Tente informar o número da OS ou o chassi (ex: "status da OS 9668").';
-  }
-  if(relevant.length>1){
-    return relevant.map(v=>`OS ${v.os} (${v.fabricante} ${v.modelo}): etapa ${v.etapa}, prazo ${fmtDate(v.prazo)}`).join('  •  ');
-  }
+  if(relevant.length===0) return 'Não encontrei nenhum veículo com esses dados. Tente informar o número da OS.';
+  if(relevant.length>1) return relevant.map(v=>`OS ${v.os}: ${v.etapa}, prazo ${fmtDate(v.prazo)}`).join('  •  ');
 
   const v = relevant[0];
-  if(qlc.includes('vidro')) return `O kit de vidro da OS ${v.os} está registrado para ${fmtDate(v.dataKitVidro)}. Etapa atual: ${v.etapa}.`;
-  if(qlc.includes(' at ')||qlc.includes('at?')||qlc.includes('exército')||qlc.includes('exercito')||qlc.includes('autoriza')) return `A Data AT (Autorização do Exército) da OS ${v.os} é ${fmtDate(v.dataAt)}.`;
-  if(qlc.includes('observa')) return v.observacoes ? `Observações da OS ${v.os}: ${v.observacoes}` : `A OS ${v.os} não possui observações registradas.`;
-  if(qlc.includes('pendênc')||qlc.includes('pendenc')||qlc.includes('peça')||qlc.includes('peca')){
-    const has = (v.observacoes||'').toUpperCase().includes('PENDÊNCIA')||(v.observacoes||'').toUpperCase().includes('PENDENCIA');
-    return has ? `Sim, a OS ${v.os} tem pendência registrada: ${v.observacoes}` : `Não encontrei pendências registradas para a OS ${v.os}.`;
-  }
-  if(qlc.includes('parad')||qlc.includes('por que')||qlc.includes('porque')){
-    return `A OS ${v.os} está na etapa "${v.etapa}"${v.observacoes ? ', com a observação: '+v.observacoes : ', sem observações registradas.'}`;
-  }
-  if(qlc.includes('etapa')||qlc.includes('status')) return `A OS ${v.os} (${v.fabricante} ${v.modelo}) está atualmente na etapa "${v.etapa}".`;
-  if(qlc.includes('chega')||qlc.includes('previs')||qlc.includes('prazo')) return `A previsão de entrega da OS ${v.os} é ${fmtDate(v.previsaoEntrega)} (prazo: ${fmtDate(v.prazo)}).`;
-
-  return `OS ${v.os} — ${v.fabricante} ${v.modelo}, cliente ${v.cliente||'—'}. Etapa: ${v.etapa}. Entrada: ${fmtDate(v.dataEntrada)}. AT: ${fmtDate(v.dataAt)}. Vidro: ${fmtDate(v.dataKitVidro)}. Prazo: ${fmtDate(v.prazo)}.${v.observacoes ? ' Observações: '+v.observacoes : ''}`;
+  return `OS ${v.os} (${v.modelo}) está na etapa "${v.etapa}". Prazo: ${fmtDate(v.prazo)}. ${v.observacoes ? 'Obs: '+v.observacoes : ''}`;
 }
 
 function ChatView({ vehicles, role, user }){
   const scoped = role==='comercial' ? vehicles.filter(v=>v.vendedor===user.vendedor) : vehicles;
   const [messages, setMessages] = useState([
-    { role:'assistant', text: role==='comercial'
-        ? `Olá, ${user.nome.split(' ')[0]}! Pergunte sobre qualquer veículo seu — ex: "Qual o status da OS 9383?" ou "Quando o vidro chega?"`
-        : 'Olá! Pergunte sobre qualquer veículo — ex: "Qual o status da OS 9668?", "O veículo tem pendência de peças?", "Quantos veículos estão aguardando vidro?"' }
+    { role:'assistant', text: `Olá! Como posso ajudar com os veículos hoje?` }
   ]);
   const [input, setInput] = useState('');
   const scrollRef = useRef(null);
 
   useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior:'smooth' }); }, [messages]);
-
-  const suggestions = [
-    'Quantos veículos estão em atraso?',
-    'Quais veículos estão aguardando vidro?',
-    role==='comercial' ? 'Como estão meus veículos hoje?' : 'Quantos veículos foram entregues?',
-  ];
 
   const ask = (question) => {
     if(!question.trim()) return;
@@ -808,9 +912,8 @@ function ChatView({ vehicles, role, user }){
     <div className="fade-up" style={{ display:'flex', flexDirection:'column', height:'100%', gap:14 }}>
       <div>
         <h1 style={{ fontSize:22, fontWeight:800, margin:0 }}>Consulta Inteligente</h1>
-        <p style={{ fontSize:12, color:COLORS.muted, margin:'4px 0 0', fontWeight:600 }}>Pergunte em linguagem natural sobre os veículos em produção</p>
+        <p style={{ fontSize:12, color:COLORS.muted, margin:'4px 0 0', fontWeight:600 }}>Pergunte sobre os veículos em produção</p>
       </div>
-
       <div className="card" style={{ flex:1, display:'flex', flexDirection:'column', minHeight:420 }}>
         <div ref={scrollRef} className="scroll-y" style={{ flex:1, padding:20, display:'flex', flexDirection:'column', gap:12 }}>
           {messages.map((m,i) => (
@@ -820,19 +923,12 @@ function ChatView({ vehicles, role, user }){
                 background: m.role==='user' ? COLORS.red : COLORS.smoke, color: m.role==='user' ? '#fff' : COLORS.ink,
                 fontSize:12.5, fontWeight: m.role==='user'?600:500, lineHeight:1.55,
               }}>
-                {m.role==='assistant' && <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:5 }}><Icon name="sparkles" size={12} color={COLORS.red}/><span style={{ fontSize:9, fontWeight:800, textTransform:'uppercase', letterSpacing:'.06em', color:COLORS.red }}>Semáforo IA</span></div>}
+                {m.role==='assistant' && <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:5 }}><Icon name="sparkles" size={12} color={COLORS.red}/><span style={{ fontSize:9, fontWeight:800, textTransform:'uppercase', color:COLORS.red }}>IA</span></div>}
                 {m.text}
               </div>
             </div>
           ))}
         </div>
-        {messages.length<=1 && (
-          <div style={{ padding:'0 20px 12px', display:'flex', gap:8, flexWrap:'wrap' }}>
-            {suggestions.map(s => (
-              <button key={s} onClick={()=>ask(s)} className="btn-ghost" style={{ fontSize:10, padding:'8px 12px', textTransform:'none', letterSpacing:0, fontWeight:600 }}>{s}</button>
-            ))}
-          </div>
-        )}
         <form onSubmit={e=>{e.preventDefault(); ask(input);}} style={{ borderTop:`1px solid ${COLORS.border}`, padding:14, display:'flex', gap:10 }}>
           <input className="input" placeholder="Ex: Qual o status da OS 9668?" value={input} onChange={e=>setInput(e.target.value)} />
           <button type="submit" className="btn-primary" disabled={!input.trim()} style={{ padding:'0 18px' }}><Icon name="send" size={15}/></button>
@@ -843,15 +939,146 @@ function ChatView({ vehicles, role, user }){
 }
 
 /* ============================================================
-   UPLOAD DA PLANILHA (Master) — grava direto no Firestore
+   GESTÃO DE USUÁRIOS
    ============================================================ */
-const COL_MAP = {
+function UsersView({ users }){
+  const [editing, setEditing] = useState(null);
+  const [showAdd, setShowAdd] = useState(false);
+  const [form, setForm] = useState({ user:'', pass:'', nome:'', role:'comercial', vendedor:'', active:true });
+
+  const save = async (e) => {
+    e.preventDefault();
+    try {
+      if(editing){
+        const newId = form.user.toLowerCase().replace(/\s+/g,'.');
+        if(newId !== editing.id){
+          await col('users').doc(newId).set(stripUndefined({...form, user:newId}));
+          await col('users').doc(editing.id).delete();
+        } else {
+          await col('users').doc(editing.id).update(stripUndefined(form));
+        }
+      } else {
+        const id = form.user.toLowerCase().replace(/\s+/g,'.');
+        await col('users').doc(id).set({ ...form, user:id });
+      }
+      setEditing(null); setShowAdd(false);
+      setForm({ user:'', pass:'', nome:'', role:'comercial', vendedor:'', active:true });
+    } catch(err){ alert('Erro ao salvar usuário'); }
+  };
+
+  const remove = async (id) => {
+    if(confirm('Deseja realmente excluir este usuário?')) {
+      await col('users').doc(id).delete();
+    }
+  };
+
+  const startEdit = (u) => {
+    setEditing(u);
+    setForm({ user:u.user, pass:u.pass, nome:u.nome, role:u.role, vendedor:u.vendedor||'', active:u.active!==false });
+    setShowAdd(true);
+  };
+
+  return (
+    <div className="fade-up" style={{ display:'flex', flexDirection:'column', gap:16, height:'100%' }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-end' }}>
+        <div>
+          <h1 style={{ fontSize:22, fontWeight:800, margin:0 }}>Gestão de Usuários</h1>
+          <p style={{ fontSize:12, color:COLORS.muted, margin:'4px 0 0', fontWeight:600 }}>Criar e editar contas de acesso</p>
+        </div>
+        <button className="btn-primary" onClick={()=>{ setEditing(null); setForm({ user:'', pass:'', nome:'', role:'comercial', vendedor:'', active:true }); setShowAdd(true); }}>
+          <Icon name="plus" size={14} /> Novo Usuário
+        </button>
+      </div>
+
+      <div className="table-container scroll-y">
+        <table className="vtable" style={{ width:'100%', borderCollapse:'collapse' }}>
+          <thead>
+            <tr>
+              <th>Usuário</th>
+              <th>Nome</th>
+              <th>Perfil</th>
+              <th>Vendedor</th>
+              <th>Status</th>
+              <th>Ações</th>
+            </tr>
+          </thead>
+          <tbody>
+            {users.map(u => (
+              <tr key={u.id}>
+                <td style={{fontWeight:800}}>{u.user}</td>
+                <td>{u.nome}</td>
+                <td><span style={{ fontSize:9, fontWeight:800, textTransform:'uppercase', color:COLORS.muted }}>{ROLE_LABEL[u.role]}</span></td>
+                <td>{u.vendedor||'—'}</td>
+                <td><span style={{ fontSize:9, fontWeight:800, textTransform:'uppercase', color: u.active!==false?'#0A6B34':'#C2410C' }}>{u.active!==false?'Ativo':'Inativo'}</span></td>
+                <td>
+                  <div style={{ display:'flex', gap:8 }}>
+                    <button onClick={()=>startEdit(u)} style={{ background:'none', border:'none', cursor:'pointer', color:COLORS.red, fontSize:11, fontWeight:700 }}>Editar</button>
+                    <button onClick={()=>remove(u.id)} style={{ background:'none', border:'none', cursor:'pointer', color:COLORS.red, fontSize:11, fontWeight:700 }}>Remover</button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {showAdd && (
+        <Modal title={editing ? 'Editar Usuário' : 'Novo Usuário'} onClose={()=>{ setShowAdd(false); setEditing(null); }}>
+          <form onSubmit={save} style={{ display:'flex', flexDirection:'column', gap:16 }}>
+            <div>
+              <label style={{ fontSize:10, fontWeight:800, textTransform:'uppercase', color:COLORS.muted, display:'block', marginBottom:6 }}>Usuário (ID de Login)</label>
+              <input className="input" value={form.user} onChange={e=>setForm({...form, user:e.target.value})} required />
+            </div>
+            <div>
+              <label style={{ fontSize:10, fontWeight:800, textTransform:'uppercase', color:COLORS.muted, display:'block', marginBottom:6 }}>Senha</label>
+              <input className="input" value={form.pass} onChange={e=>setForm({...form, pass:e.target.value})} required />
+            </div>
+            <div>
+              <label style={{ fontSize:10, fontWeight:800, textTransform:'uppercase', color:COLORS.muted, display:'block', marginBottom:6 }}>Nome Completo</label>
+              <input className="input" value={form.nome} onChange={e=>setForm({...form, nome:e.target.value})} required />
+            </div>
+            <div>
+              <label style={{ fontSize:10, fontWeight:800, textTransform:'uppercase', color:COLORS.muted, display:'block', marginBottom:6 }}>Perfil</label>
+              <select className="input" value={form.role} onChange={e=>setForm({...form, role:e.target.value})}>
+                <option value="comercial">Comercial</option>
+                <option value="operacional">Operacional</option>
+                <option value="master">Master (Administrador)</option>
+              </select>
+            </div>
+            {form.role==='comercial' && (
+              <div>
+                <label style={{ fontSize:10, fontWeight:800, textTransform:'uppercase', color:COLORS.muted, display:'block', marginBottom:6 }}>Vendedor (Nome na Planilha)</label>
+                <input className="input" value={form.vendedor} onChange={e=>setForm({...form, vendedor:e.target.value})} required />
+              </div>
+            )}
+            <label style={{ display:'flex', alignItems:'center', gap:8, cursor:'pointer', fontSize:12, fontWeight:600 }}>
+              <input type="checkbox" checked={form.active} onChange={e=>setForm({...form, active:e.target.checked})} /> Usuário Ativo
+            </label>
+            <button type="submit" className="btn-primary" style={{ marginTop:10 }}>{editing?'Salvar Alterações':'Criar Usuário'}</button>
+          </form>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+/* ============================================================
+   UPLOAD DA PLANILHA
+   ============================================================ */
+const MAP_OPERACIONAL = {
   'OS':'os', 'VENDEDOR':'vendedor', 'CLIENTE':'cliente', 'PARCEIRO':'parceiro', 'MODELO':'modelo',
-  'FABRICANTE':'fabricante', 'COR':'cor', 'CHASSI':'chassi', 'DATA ENTRADA':'dataEntrada',
+  'FABRICANTE':'fabricante', 'COR ':'cor', 'CHASSI':'chassi', 'DATA ENTRADA':'dataEntrada',
   'DATA DESMONTAGEM':'dataDesmontagem', 'DATA KIT VIDRO':'dataKitVidro', 'DATA AT':'dataAt', 'DB':'db',
-  'ETAPA':'etapa', 'LOCALIZAÇÃO':'localizacao', 'OBSERVAÇÕES':'observacoes', 'PRAZO':'prazo',
+  'ETAPA':'etapa', 'LOCALIZAÇÃO':'localizacao', 'OBSERVAÇÕES':'observacoes', 'PRAZO ':'prazo',
   'PREVISÃO ENTREGA':'previsaoEntrega', 'DIAS':'dias', 'DATA ENTREGA':'dataEntrega',
   'LEAD TIME PRODUÇÃO':'leadTime', 'CUMPRIMENTO DE PRAZOS':'cumprimentoPrazo',
+};
+
+const MAP_COMERCIAL = {
+  'OS':'os', 'CLIENTE':'cliente', 'MODELO':'modelo', 'CHASSI':'chassi', 'COR':'cor',
+  'DATA ENTRADA':'dataEntrada', 'DATA AUT. EXÉRCITO':'dataAt', 'DATA VIDROS':'dataKitVidro',
+  'DATA CONTRATUAL':'prazo', 'DATA NOVA PREVISÃO':'previsaoEntrega', 'DIAS':'dias',
+  'STATUS':'etapa', 'OBSERVAÇÕES':'observacoes', 'MARCA':'fabricante',
 };
 
 function excelDateToStr(v){
@@ -868,9 +1095,21 @@ function excelDateToStr(v){
 }
 
 function parseWorkbook(workbook){
-  const sheetName = workbook.SheetNames.find(n => n.toUpperCase().includes('PRINCIPAL')) || workbook.SheetNames[0];
-  const ws = workbook.Sheets[sheetName];
-  const rows = XLSX.utils.sheet_to_json(ws, { defval:null, raw:true });
+  const sheetNames = workbook.SheetNames;
+  let map = MAP_OPERACIONAL;
+  let ws = null;
+  let startRow = 0;
+
+  if(sheetNames.includes('Semáforo Geral')){
+    map = MAP_COMERCIAL;
+    ws = workbook.Sheets['Semáforo Geral'];
+    startRow = 2;
+  } else {
+    const mainSheet = sheetNames.find(n => n.toUpperCase().includes('PRINCIPAL')) || sheetNames[0];
+    ws = workbook.Sheets[mainSheet];
+  }
+
+  const rows = XLSX.utils.sheet_to_json(ws, { defval:null, raw:true, range: startRow });
   const dateFields = new Set(['dataEntrada','dataDesmontagem','dataKitVidro','dataAt','prazo','previsaoEntrega','dataEntrega']);
 
   const vehicles = [];
@@ -878,14 +1117,15 @@ function parseWorkbook(workbook){
     const rec = {};
     for(const [rawKey, val] of Object.entries(row)){
       const key = rawKey.trim().toUpperCase();
-      const mapped = COL_MAP[key];
+      const mapped = map[key];
       if(!mapped) continue;
       rec[mapped] = val;
     }
-    if(rec.os == null || rec.os === '') continue;
+    if(rec.os == null || rec.os === '' || isNaN(parseInt(rec.os))) continue;
     rec.os = parseInt(rec.os, 10);
     dateFields.forEach(f => { if(rec[f]!=null) rec[f] = excelDateToStr(rec[f]); });
     rec.etapa = (rec.etapa || 'RECEBIDO').toString().trim().toUpperCase();
+    if(rec.etapa === '0') rec.etapa = 'RECEBIDO';
     rec.dias = rec.dias!=null && rec.dias!=='' ? Math.round(Number(rec.dias)) : null;
     vehicles.push(rec);
   }
@@ -943,7 +1183,7 @@ function UploadView({ users, history, onDone }){
       const vehicles = parseWorkbook(wb);
       if(vehicles.length===0){
         setStatus('error');
-        setErrorMsg('Não encontrei nenhuma linha válida (coluna "OS") na planilha. Verifique se é o arquivo do Semáforo Operacional.');
+        setErrorMsg('Não encontrei nenhuma linha válida (coluna "OS") na planilha.');
         return;
       }
       await replaceVehiclesInFirestore(vehicles, setStep);
@@ -956,7 +1196,7 @@ function UploadView({ users, history, onDone }){
     } catch(e){
       console.error(e);
       setStatus('error');
-      setErrorMsg('Não foi possível processar este arquivo. Confirme que é um .xlsx válido e que as regras do Firestore permitem escrita.');
+      setErrorMsg('Erro ao processar arquivo.');
     }
   };
 
@@ -964,9 +1204,8 @@ function UploadView({ users, history, onDone }){
     <div className="fade-up" style={{ display:'flex', flexDirection:'column', gap:18 }}>
       <div>
         <h1 style={{ fontSize:22, fontWeight:800, margin:0 }}>Upload da Planilha</h1>
-        <p style={{ fontSize:12, color:COLORS.muted, margin:'4px 0 0', fontWeight:600 }}>Envie o Semáforo Operacional (.xlsx) para atualizar o Firebase — todo o portal (Dashboard, Busca e Visão Comercial) reflete em tempo real</p>
+        <p style={{ fontSize:12, color:COLORS.muted, margin:'4px 0 0', fontWeight:600 }}>Envie SEMAFORO (ATUALIZADO).xlsx ou SemáforoComercial.xlsx</p>
       </div>
-
       <div
         onDragOver={e=>{e.preventDefault(); setDragOver(true);}}
         onDragLeave={()=>setDragOver(false)}
@@ -979,8 +1218,7 @@ function UploadView({ users, history, onDone }){
         {status==='processing' ? (
           <>
             <Icon name="loader-2" size={30} color={COLORS.red} className="spin" />
-            <div style={{ fontWeight:800, fontSize:13, marginTop:14 }}>{step || 'Processando...'}</div>
-            <div style={{ fontSize:11, color:COLORS.muted, marginTop:4 }}>Não feche esta página</div>
+            <div style={{ fontWeight:800, fontSize:13, marginTop:14 }}>{step}</div>
           </>
         ) : (
           <>
@@ -988,229 +1226,122 @@ function UploadView({ users, history, onDone }){
               <Icon name="file-spreadsheet" size={26} color={COLORS.red} />
             </div>
             <div style={{ fontWeight:800, fontSize:14 }}>Arraste a planilha aqui ou clique para selecionar</div>
-            <div style={{ fontSize:11, color:COLORS.muted, marginTop:6 }}>Formato aceito: .xlsx — planilha "Semáforo Operacional"</div>
           </>
         )}
       </div>
-
-      {status==='error' && (
-        <div className="shake card" style={{ padding:16, background:COLORS.redLight, borderColor:'#FFBDBD', display:'flex', gap:10, alignItems:'flex-start' }}>
-          <Icon name="alert-circle" size={16} color={COLORS.red} style={{ flexShrink:0, marginTop:1 }}/>
-          <div style={{ fontSize:12, fontWeight:600, color:COLORS.red }}>{errorMsg}</div>
-        </div>
-      )}
       {status==='done' && summary && (
-        <div className="fade-in card" style={{ padding:16, background:'#EDFAF3', borderColor:'#AAE6C5', display:'flex', gap:10, alignItems:'flex-start' }}>
-          <Icon name="check-circle" size={16} color="#0A6B34" style={{ flexShrink:0, marginTop:1 }}/>
-          <div>
-            <div style={{ fontSize:12.5, fontWeight:800, color:'#0A6B34' }}>Planilha processada com sucesso</div>
-            <div style={{ fontSize:11, fontWeight:600, color:'#0A6B34', marginTop:2 }}>
-              {summary.count} veículos gravados no Firebase a partir de "{summary.fileName}".
-              {summary.newVendors>0 && ` ${summary.newVendors} nova(s) conta(s) de vendedor criada(s) (senha padrão: vrz2026).`}
-            </div>
-          </div>
+        <div className="fade-in card" style={{ padding:16, background:'#EDFAF3', borderColor:'#AAE6C5', color:'#0A6B34' }}>
+          <b>Sucesso!</b> {summary.count} veículos atualizados.
         </div>
       )}
-
-      <div className="card" style={{ padding:20 }}>
-        <div style={{ fontSize:11, fontWeight:800, textTransform:'uppercase', letterSpacing:'.06em', color:COLORS.muted, marginBottom:14 }}>Histórico de Atualizações</div>
-        {history.length===0 && <div style={{ fontSize:12, color:COLORS.muted, fontWeight:600 }}>Nenhuma atualização registrada ainda.</div>}
-        <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
-          {history.slice(0,10).map((h) => (
-            <div key={h.id} style={{ display:'flex', alignItems:'center', gap:10, padding:'10px 12px', background:COLORS.smoke, borderRadius:10 }}>
-              <Icon name="file-spreadsheet" size={14} color={COLORS.muted} />
-              <div style={{ flex:1 }}>
-                <div style={{ fontSize:11.5, fontWeight:700 }}>{h.fileName}</div>
-                <div style={{ fontSize:10, color:COLORS.muted, fontWeight:600 }}>{h.count} veículos · {h.date}</div>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
     </div>
   );
 }
 
 /* ============================================================
-   USUÁRIOS (Master)
-   ============================================================ */
-function UsersView({ users }){
-  const [resetMsg, setResetMsg] = useState(null);
-
-  const toggle = (u) => col('users').doc(u.user).update({ active: !(u.active!==false) });
-  const resetPass = (u) => {
-    const newPass = 'vrz' + Math.floor(1000+Math.random()*9000);
-    col('users').doc(u.user).update({ pass:newPass }).then(()=>setResetMsg({ user:u.user, pass:newPass }));
-  };
-
-  return (
-    <div className="fade-up" style={{ display:'flex', flexDirection:'column', gap:16 }}>
-      <div>
-        <h1 style={{ fontSize:22, fontWeight:800, margin:0 }}>Usuários</h1>
-        <p style={{ fontSize:12, color:COLORS.muted, margin:'4px 0 0', fontWeight:600 }}>Contas de vendedores são criadas automaticamente a cada upload de planilha — {users.length} conta(s)</p>
-      </div>
-      {resetMsg && (
-        <div className="fade-in card" style={{ padding:14, background:'#EAF0FF', borderColor:'#C0D0F5', fontSize:12, fontWeight:700, color:'#1A4EC2' }}>
-          Nova senha de <b>{resetMsg.user}</b>: <span className="mono">{resetMsg.pass}</span> — anote e repasse ao usuário.
-        </div>
-      )}
-      <div className="card" style={{ overflow:'auto' }}>
-        <table className="vtable" style={{ width:'100%', borderCollapse:'collapse' }}>
-          <thead><tr><th>Usuário</th><th>Nome</th><th>Perfil</th><th>Status</th><th></th></tr></thead>
-          <tbody>
-            {users.map(u => (
-              <tr key={u.user} style={{ cursor:'default' }}>
-                <td className="mono" style={{ fontWeight:700 }}>{u.user}</td>
-                <td>{u.nome}</td>
-                <td><span className="badge" style={ROLE_BADGE_STYLE[u.role]}>{ROLE_LABEL[u.role]}</span></td>
-                <td>
-                  <span className="badge" style={ u.active!==false ? { background:'#EDFAF3', color:'#0A6B34', border:'1px solid #AAE6C5' } : { background:COLORS.smoke, color:COLORS.muted, border:`1px solid ${COLORS.border}` } }>
-                    {u.active!==false ? 'Ativo' : 'Inativo'}
-                  </span>
-                </td>
-                <td style={{ display:'flex', gap:6 }}>
-                  {u.user!==MASTER_USER && (
-                    <>
-                      <button className="btn-ghost" style={{ padding:'6px 10px', fontSize:9 }} onClick={()=>toggle(u)}>{u.active!==false ? 'Desativar' : 'Ativar'}</button>
-                      <button className="btn-ghost" style={{ padding:'6px 10px', fontSize:9 }} onClick={()=>resetPass(u)}>Redefinir senha</button>
-                    </>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-/* ============================================================
-   TELA DE CONFIGURAÇÃO (Firebase ainda não conectado)
-   ============================================================ */
-function SetupScreen({ errorMsg }){
-  return (
-    <div className="login-bg" style={{ minHeight:'100vh', width:'100%', display:'flex', alignItems:'center', justifyContent:'center', padding:24 }}>
-      <div className="fade-in card" style={{ width:'100%', maxWidth:560, padding:32, background:'#fff' }}>
-        <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:6 }}>
-          <div style={{ width:40, height:40, borderRadius:10, background:COLORS.redLight, display:'flex', alignItems:'center', justifyContent:'center' }}>
-            <Icon name="alert-circle" size={20} color={COLORS.red} />
-          </div>
-          <h1 style={{ fontSize:19, fontWeight:800, margin:0 }}>{errorMsg ? 'Não foi possível conectar ao Firebase' : 'Firebase ainda não configurado'}</h1>
-        </div>
-        {errorMsg && (
-          <div className="mono" style={{ background:COLORS.smoke, borderRadius:8, padding:'8px 12px', fontSize:11, color:COLORS.red, margin:'12px 0' }}>{errorMsg}</div>
-        )}
-        <p style={{ fontSize:12.5, color:COLORS.muted, fontWeight:600, lineHeight:1.7, margin:'14px 0' }}>
-          Este portal usa o Firestore (Firebase) como banco de dados. Para funcionar, edite o arquivo <b>semaforo_portal.html</b> e preencha o objeto <span className="mono">FB</span> com os dados do seu projeto:
-        </p>
-        <ol style={{ fontSize:12.5, color:COLORS.ink, fontWeight:600, lineHeight:2, paddingLeft:18, margin:'0 0 16px' }}>
-          <li>Acesse <span className="mono">console.firebase.google.com</span> e crie um projeto (gratuito)</li>
-          <li>No menu lateral, vá em <b>Build → Firestore Database</b> e clique em "Criar banco de dados" (modo produção)</li>
-          <li>Em <b>Configurações do projeto → Seus apps</b>, adicione um app da Web e copie o objeto de configuração</li>
-          <li>Cole os valores no objeto <span className="mono">const FB = {'{...}'}</span> no início do arquivo HTML</li>
-          <li>Em <b>Firestore Database → Regras</b>, publique uma regra permitindo leitura/escrita, por exemplo:</li>
-        </ol>
-        <pre className="mono" style={{ background:COLORS.ink, color:'#9ef7c6', fontSize:10.5, padding:14, borderRadius:10, overflow:'auto', lineHeight:1.6 }}>{`rules_version = '2';
-service cloud.firestore {
-  match /databases/{database}/documents {
-    match /artifacts/portal-semaforo/public/data/{document=**} {
-      allow read, write: if true;
-    }
-  }
-}`}</pre>
-        <p style={{ fontSize:11, color:COLORS.muted, fontWeight:600, marginTop:14 }}>Assim que salvar o arquivo com a configuração correta, recarregue a página — o usuário Master (Lucas.Sabino) será criado automaticamente.</p>
-      </div>
-    </div>
-  );
-}
-
-/* ============================================================
-   APP
+   APP PRINCIPAL
    ============================================================ */
 function App(){
-  const { data: usersRaw, loading: usersLoading, error: usersError } = useFirestore('users');
-  const { data: vehicles, loading: vehiclesLoading } = useFirestore('vehicles');
-  const { data: uploadsRaw } = useFirestore('uploads');
-  const [loggedUser, setLoggedUser] = useState(null);
-  const [active, setActive] = useState('dashboard');
-  const [seeded, setSeeded] = useState(false);
-  const [seedError, setSeedError] = useState(null);
+  const [user, setUser] = useState(() => {
+    const s = localStorage.getItem('semaforo_session');
+    return s ? JSON.parse(s) : null;
+  });
+  const [view, setView] = useState('dashboard');
+  const { data:vehicles, loading:vLoading } = useFirestore('vehicles');
+  const { data:users, loading:uLoading } = useFirestore('users');
+  const { data:history } = useFirestore('uploads');
 
-  const history = useMemo(() => [...uploadsRaw].sort((a,b)=>(b.ts||0)-(a.ts||0)), [uploadsRaw]);
+  const onLogin = (u) => { setUser(u); localStorage.setItem('semaforo_session', JSON.stringify(u)); };
+  const onLogout = () => { setUser(null); localStorage.removeItem('semaforo_session'); };
 
-  // Bootstrap: cria o usuário Master automaticamente se a coleção estiver vazia
-  useEffect(() => {
-    if(FB_CONFIGURED && !usersLoading && !usersError && usersRaw.length===0 && !seeded){
-      setSeeded(true);
-      col('users').doc(MASTER_USER).set({
-        user: MASTER_USER, pass: MASTER_PASS, role:'master', nome:'Lucas Sabino', active:true,
-      }).catch(e => { console.error(e); setSeedError(e.message||String(e)); setSeeded(false); });
-    }
-  }, [usersLoading, usersError, usersRaw, seeded]);
+  if(!user) return <LoginView users={users} onLogin={onLogin} />;
 
-  // Mantém o usuário logado sincronizado com o Firestore (ex: se for desativado)
-  useEffect(() => {
-    if(!loggedUser) return;
-    const fresh = usersRaw.find(u => u.user === loggedUser.user);
-    if(!fresh || fresh.active===false){ setLoggedUser(null); return; }
-    if(JSON.stringify(fresh) !== JSON.stringify(loggedUser)) setLoggedUser(fresh);
-  }, [usersRaw]);
-
-  const handleLogin = (u) => { setLoggedUser(u); setActive('dashboard'); };
-  const handleLogout = () => setLoggedUser(null);
-
-  const scopedVehicles = useMemo(() => {
-    if(!loggedUser) return [];
-    if(loggedUser.role==='comercial') return vehicles.filter(v=>v.vendedor===loggedUser.vendedor);
-    return vehicles;
-  }, [vehicles, loggedUser]);
-
-  if(!FB_CONFIGURED){
-    return <SetupScreen />;
-  }
-
-  if(usersError || seedError){
-    return <SetupScreen errorMsg={usersError || seedError} />;
-  }
-
-  if(usersLoading || (usersRaw.length===0 && !seeded)){
-    return (
-      <div className="login-bg" style={{ height:'100vh', width:'100%', display:'flex', alignItems:'center', justifyContent:'center' }}>
-        <Icon name="loader-2" size={30} color="#fff" className="spin" />
-      </div>
-    );
-  }
-
-  if(!loggedUser){
-    return <LoginView users={usersRaw} onLogin={handleLogin} />;
-  }
+  const role = user.role;
+  const NavItem = ({ id, icon, label }) => (
+    <button className={`nav-item ${view===id?'active':''}`} onClick={()=>setView(id)}>
+      <div className="nav-icon"><Icon name={icon} size={16} /></div>
+      <span>{label}</span>
+    </button>
+  );
 
   return (
-    <div style={{ display:'flex', height:'100vh', width:'100%', background:'#fff' }}>
-      <Sidebar role={loggedUser.role} active={active} setActive={setActive} user={loggedUser} onLogout={handleLogout} />
-      <div className="main-area scroll-y" style={{ flex:1, padding:'28px 32px', height:'100vh' }}>
-        {vehiclesLoading ? (
-          <div style={{ display:'flex', alignItems:'center', gap:10, color:COLORS.muted, fontWeight:700, fontSize:12 }}>
-            <Icon name="loader-2" size={16} className="spin" /> Carregando dados do Firebase...
+    <div style={{ display:'flex', height:'100vh', background:'#fff' }}>
+      {/* Sidebar */}
+      <div className="sidebar" style={{ width:260, background:COLORS.black, display:'flex', flexDirection:'column', padding:20 }}>
+        <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:36, paddingLeft:4 }}>
+          <div style={{ width:32, height:32, background:COLORS.red, borderRadius:9, display:'flex', alignItems:'center', justifyContent:'center' }}>
+            <Icon name="traffic-light" size={18} color="#fff" />
+          </div>
+          <div style={{ color:'#fff', fontWeight:900, fontSize:16, letterSpacing:'-.01em' }}>Semáforo</div>
+        </div>
+        
+        <div style={{ flex:1, display:'flex', flexDirection:'column', gap:6 }}>
+          <NavItem id="dashboard" icon="layout-dashboard" label="Dashboard" />
+          <NavItem id="operacional" icon="settings" label="Visão Operacional" />
+          <NavItem id="comercial" icon="briefcase" label="Visão Comercial" />
+          <NavItem id="chat" icon="sparkles" label="Consulta IA" />
+          {role==='master' && (
+            <>
+              <NavItem id="upload" icon="upload-cloud" label="Atualizar Dados" />
+              <NavItem id="users" icon="users" label="Usuários" />
+            </>
+          )}
+        </div>
+
+        <div style={{ marginTop:'auto', paddingTop:20, borderTop:'1px solid rgba(255,255,255,.1)' }}>
+          <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:16, paddingLeft:4 }}>
+            <div style={{ width:36, height:36, borderRadius:10, background:'rgba(255,255,255,.1)', display:'flex', alignItems:'center', justifyContent:'center', color:'#fff', fontWeight:800, fontSize:13 }}>{initials(user.nome)}</div>
+            <div style={{ minWidth:0 }}>
+              <div style={{ color:'#fff', fontSize:11.5, fontWeight:700, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{user.nome}</div>
+              <div style={{ color:'rgba(255,255,255,.4)', fontSize:9, fontWeight:800, textTransform:'uppercase', letterSpacing:'.04em', marginTop:2 }}>{ROLE_LABEL[role]}</div>
+            </div>
+          </div>
+          <button onClick={onLogout} className="nav-item" style={{ color:COLORS.red }}>
+            <div className="nav-icon" style={{ background:'rgba(220,31,31,.1)' }}><Icon name="log-out" size={16} color={COLORS.red} /></div>
+            <span>Sair</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Main */}
+      <div className="main-area" style={{ flex:1, padding:'32px 40px', background:'#fff', display:'flex', flexDirection:'column', overflow:'hidden' }}>
+        {vLoading || uLoading ? (
+          <div style={{ height:'100%', display:'flex', alignItems:'center', justifyContent:'center' }}>
+            <Icon name="loader-2" size={24} color={COLORS.red} className="spin" />
           </div>
         ) : (
-          <>
-            {active==='dashboard' && <DashboardView vehicles={scopedVehicles} role={loggedUser.role} user={loggedUser} />}
-            {active==='veiculos' && <SearchView vehicles={vehicles} role={loggedUser.role} />}
-            {active==='comercial' && <ComercialView vehicles={vehicles} role={loggedUser.role} user={loggedUser} />}
-            {active==='ia' && <ChatView vehicles={vehicles} role={loggedUser.role} user={loggedUser} />}
-            {active==='upload' && loggedUser.role==='master' && <UploadView users={usersRaw} history={history} onDone={()=>{}} />}
-            {active==='usuarios' && loggedUser.role==='master' && <UsersView users={usersRaw} />}
-          </>
+          <div style={{ flex:1, display:'flex', flexDirection:'column', minHeight:0 }}>
+            {view==='dashboard' && <div className="scroll-y" style={{flex:1}}><DashboardView vehicles={vehicles} role={role} user={user} /></div>}
+            {view==='operacional' && <OperacionalView vehicles={vehicles} role={role} />}
+            {view==='comercial' && <ComercialView vehicles={vehicles} role={role} user={user} />}
+            {view==='chat' && <ChatView vehicles={vehicles} role={role} user={user} />}
+            {view==='upload' && role==='master' && <div className="scroll-y" style={{flex:1}}><UploadView users={users} history={history} onDone={()=>{}} /></div>}
+            {view==='users' && role==='master' && <UsersView users={users} />}
+          </div>
         )}
       </div>
-      <BottomNav role={loggedUser.role} active={active} setActive={setActive} />
+
+      {/* Mobile Nav */}
+      <div className="bottom-nav">
+        <button className="bottom-nav-btn" onClick={()=>setView('dashboard')} style={{ color:view==='dashboard'?COLORS.red:COLORS.muted }}>
+          <Icon name="layout-dashboard" size={20} /><span>Início</span>
+        </button>
+        <button className="bottom-nav-btn" onClick={()=>setView('operacional')} style={{ color:view==='operacional'?COLORS.red:COLORS.muted }}>
+          <Icon name="settings" size={20} /><span>Operacional</span>
+        </button>
+        <button className="bottom-nav-btn" onClick={()=>setView('comercial')} style={{ color:view==='comercial'?COLORS.red:COLORS.muted }}>
+          <Icon name="briefcase" size={20} /><span>Comercial</span>
+        </button>
+        <button className="bottom-nav-btn" onClick={()=>setView('chat')} style={{ color:view==='chat'?COLORS.red:COLORS.muted }}>
+          <Icon name="sparkles" size={20} /><span>IA</span>
+        </button>
+      </div>
     </div>
   );
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<App />);
 </script>
 </body>
 </html>
