@@ -637,17 +637,23 @@ function GenericTableView({ vehicles, role, title, subtitle, columns, initialExp
   };
 
   const exportPDF = () => {
-    const doc = new jsPDF.jsPDF();
-    const headers = exportCols.map(c => columns.find(col=>col.key===c)?.label || c);
-    const rows = filtered.map(v => exportCols.map(key => {
-      if(key === 'etapa') return v[key];
-      else if(key.toLowerCase().includes('data') || key === 'prazo' || key === 'previsaoEntrega') return fmtDate(v[key]);
-      else return v[key] ?? '';
-    }));
-    doc.autoTable({ head: [headers], body: rows, startY: 20 });
-    doc.text(title, 14, 10);
-    const title2 = `${title.replace(/\s+/g,'_')}_${new Date().toISOString().slice(0,10)}`;
-    doc.save(title2 + '.pdf');
+    try {
+      const doc = new jsPDF.jsPDF({ orientation: 'l', unit: 'mm', format: 'a4' });
+      const headers = exportCols.map(c => columns.find(col=>col.key===c)?.label || c);
+      const rows = filtered.map(v => exportCols.map(key => {
+        if(key === 'etapa') return v[key];
+        else if(key.toLowerCase().includes('data') || key === 'prazo' || key === 'previsaoEntrega' || key === 'dataContratual' || key === 'dataIndicativa') return fmtDate(v[key]);
+        else return v[key] ?? '';
+      }));
+      doc.text(title, 14, 10);
+      doc.autoTable({ head: [headers], body: rows, startY: 20, margin: 10, styles: { fontSize: 9 }, headStyles: { fillColor: [220, 31, 31], textColor: 255, fontStyle: 'bold' } });
+      const title2 = `${title.replace(/\s+/g,'_')}_${new Date().toISOString().slice(0,10)}`;
+      doc.save(title2 + '.pdf');
+      setShowExportModal(false);
+    } catch(err){
+      console.error('Erro ao exportar PDF:', err);
+      alert('Erro ao exportar PDF. Verifique o console para mais detalhes.');
+    }
   };
 
   return (
@@ -725,7 +731,7 @@ function GenericTableView({ vehicles, role, title, subtitle, columns, initialExp
                         </div>
                       ) : (
                         c.key==='leadTime' ? (v[c.key] != null ? Math.round(Number(v[c.key])) : '—') :
-                        (c.key.toLowerCase().includes('data') || c.key==='prazo' || c.key==='previsaoEntrega' || c.key==='dataContratual' || c.key==='dataIndicativa' ? fmtDate(v[c.key]) : (v[c.key] ?? '—'))
+                        (c.key.toLowerCase().includes('data') || c.key==='prazo' || c.key==='previsaoEntrega' || c.key==='dataContratual' || c.key==='dataIndicativa' || c.key==='dataAt' || c.key==='dataKitVidro' || c.key==='dataEntrega' ? fmtDate(v[c.key]) : (v[c.key] ?? '—'))
                       )
                     )}
                   </td>
