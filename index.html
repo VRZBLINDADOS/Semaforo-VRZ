@@ -866,17 +866,30 @@ function findRelevantVehicles(question, vehicles){
   return found.slice(0,6);
 }
 
-function composeAnswer(question, scoped){
+function composeAnswer(question, scoped, role, user, vehicles){
   const qlc = question.toLowerCase();
+  const q = question.toUpperCase();
+  const osMatches = [...q.matchAll(/\b(\d{3,6})\b/g)].map(m=>parseInt(m[1],10));
+  
+  if(osMatches.length && role === 'comercial'){
+    const osNumber = osMatches[0];
+    const osVehicle = vehicles.find(v => v.os === osNumber);
+    if(osVehicle && osVehicle.vendedor !== user.vendedor){
+      return 'Essa OS não pertence ao seu usuário.';
+    }
+  }
+  
   const total = scoped.length;
   const countAtraso = scoped.filter(v=>v.etapa!=='ENTREGUE' && v.dias!=null && v.dias<0).length;
   const countVidro = scoped.filter(v=>v.etapa==='VIDRO').length;
   const countEntregue = scoped.filter(v=>v.etapa==='ENTREGUE').length;
+  const countProducao = scoped.filter(v=>v.etapa!=='ENTREGUE').length;
 
   if(/quant[oa]s/.test(qlc)){
     if(qlc.includes('atraso')) return `Atualmente há ${countAtraso} veículo(s) em atraso, de um total de ${total}.`;
     if(qlc.includes('vidro')) return `${countVidro} veículo(s) estão na etapa de VIDRO no momento.`;
     if(qlc.includes('entreg')) return `${countEntregue} veículo(s) já foram entregues.`;
+    if(qlc.includes('produ')) return `${countProducao} veículo(s) estão em produção.`;
     return `No total, ${total} veículo(s) estão cadastrados.`;
   }
 
@@ -885,7 +898,8 @@ function composeAnswer(question, scoped){
   if(relevant.length>1) return relevant.map(v=>`OS ${v.os}: ${v.etapa}, prazo ${fmtDate(v.prazo)}`).join('  •  ');
 
   const v = relevant[0];
-  return `OS ${v.os} (${v.modelo}) está na etapa "${v.etapa}". Prazo: ${fmtDate(v.prazo)}. ${v.observacoes ? 'Obs: '+v.observacoes : ''}`;
+  const daysInfo = v.dias != null ? ` (${v.dias > 0 ? '+' : ''}${v.dias} dias)` : '';
+  return `OS ${v.os} (${v.modelo}) está na etapa "${v.etapa}". Prazo: ${fmtDate(v.prazo)}${daysInfo}. ${v.observacoes ? 'Obs: '+v.observacoes : ''}`;
 }
 
 function ChatView({ vehicles, role, user }){
@@ -894,45 +908,131 @@ function ChatView({ vehicles, role, user }){
     { role:'assistant', text: `Olá! Como posso ajudar com os veículos hoje?` }
   ]);
   const [input, setInput] = useState('');
+  const [history, setHistory] = useState([]);
+  const [showHistory, setShowHistory] = useState(false);
+  const [loading, setLoading] = useState(false);
   const scrollRef = useRef(null);
+
+  useEffect(() => {
+    const loadHistory = async () => {
+      try {
+        const snap = await col('chat_history').where('userId', '==', user.id).orderBy('timestamp', 'desc').limit(50).get();
+        const docs = snap.docs.map(d => d.data());
+        setHistory(docs);
+      } catch(err){
+        console.log('Histórico ainda não disponível');
+      }
+    };
+    loadHistory();
+  }, [user.id]);
 
   useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior:'smooth' }); }, [messages]);
 
-  const ask = (question) => {
+  const saveToHistory = async (question, answer) => {
+    try {
+      await col('chat_history').add({
+        userId: user.id,
+        userName: user.nome,
+        question,
+        answer,
+        timestamp: new Date(),
+        role: role
+      });
+    } catch(err){
+      console.log('Erro ao salvar histórico');
+    }
+  };
+
+  const ask = async (question) => {
     if(!question.trim()) return;
     setMessages(m => [...m, { role:'user', text: question }]);
     setInput('');
-    setTimeout(() => {
-      const answer = composeAnswer(question, scoped);
+    setLoading(true);
+    
+    setTimeout(async () => {
+      const answer = composeAnswer(question, scoped, role, user, vehicles);
       setMessages(m => [...m, { role:'assistant', text: answer }]);
+      await saveToHistory(question, answer);
+      setLoading(false);
     }, 250);
   };
 
   return (
     <div className="fade-up" style={{ display:'flex', flexDirection:'column', height:'100%', gap:14 }}>
-      <div>
-        <h1 style={{ fontSize:22, fontWeight:800, margin:0 }}>Consulta Inteligente</h1>
-        <p style={{ fontSize:12, color:COLORS.muted, margin:'4px 0 0', fontWeight:600 }}>Pergunte sobre os veículos em produção</p>
-      </div>
-      <div className="card" style={{ flex:1, display:'flex', flexDirection:'column', minHeight:420 }}>
-        <div ref={scrollRef} className="scroll-y" style={{ flex:1, padding:20, display:'flex', flexDirection:'column', gap:12 }}>
-          {messages.map((m,i) => (
-            <div key={i} style={{ display:'flex', justifyContent: m.role==='user' ? 'flex-end':'flex-start' }}>
-              <div style={{
-                maxWidth:'78%', padding:'11px 15px', borderRadius: m.role==='user' ? '14px 14px 3px 14px':'14px 14px 14px 3px',
-                background: m.role==='user' ? COLORS.red : COLORS.smoke, color: m.role==='user' ? '#fff' : COLORS.ink,
-                fontSize:12.5, fontWeight: m.role==='user'?600:500, lineHeight:1.55,
-              }}>
-                {m.role==='assistant' && <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:5 }}><Icon name="sparkles" size={12} color={COLORS.red}/><span style={{ fontSize:9, fontWeight:800, textTransform:'uppercase', color:COLORS.red }}>IA</span></div>}
-                {m.text}
-              </div>
-            </div>
-          ))}
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-end' }}>
+        <div>
+          <h1 style={{ fontSize:22, fontWeight:800, margin:0 }}>Consulta Inteligente</h1>
+          <p style={{ fontSize:12, color:COLORS.muted, margin:'4px 0 0', fontWeight:600 }}>Pergunte sobre os veículos em produção</p>
         </div>
-        <form onSubmit={e=>{e.preventDefault(); ask(input);}} style={{ borderTop:`1px solid ${COLORS.border}`, padding:14, display:'flex', gap:10 }}>
-          <input className="input" placeholder="Ex: Qual o status da OS 9668?" value={input} onChange={e=>setInput(e.target.value)} />
-          <button type="submit" className="btn-primary" disabled={!input.trim()} style={{ padding:'0 18px' }}><Icon name="send" size={15}/></button>
-        </form>
+        {history.length > 0 && (
+          <button 
+            onClick={() => setShowHistory(!showHistory)}
+            style={{ background:'none', border:'none', cursor:'pointer', fontSize:11, fontWeight:700, color:COLORS.red, textTransform:'uppercase' }}
+          >
+            <Icon name="history" size={14} style={{ marginRight:4 }} /> Histórico ({history.length})
+          </button>
+        )}
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns: showHistory ? '1fr 280px' : '1fr', gap:16, flex:1, minHeight:0 }}>
+        <div className="card" style={{ flex:1, display:'flex', flexDirection:'column', minHeight:420 }}>
+          <div ref={scrollRef} className="scroll-y" style={{ flex:1, padding:20, display:'flex', flexDirection:'column', gap:12 }}>
+            {messages.map((m,i) => (
+              <div key={i} style={{ display:'flex', justifyContent: m.role==='user' ? 'flex-end':'flex-start' }}>
+                <div style={{
+                  maxWidth:'78%', padding:'11px 15px', borderRadius: m.role==='user' ? '14px 14px 3px 14px':'14px 14px 14px 3px',
+                  background: m.role==='user' ? COLORS.red : COLORS.smoke, color: m.role==='user' ? '#fff' : COLORS.ink,
+                  fontSize:12.5, fontWeight: m.role==='user'?600:500, lineHeight:1.55,
+                }}>
+                  {m.role==='assistant' && <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:5 }}><Icon name="sparkles" size={12} color={COLORS.red}/><span style={{ fontSize:9, fontWeight:800, textTransform:'uppercase', color:COLORS.red }}>IA</span></div>}
+                  {m.text}
+                </div>
+              </div>
+            ))}
+            {loading && (
+              <div style={{ display:'flex', justifyContent:'flex-start' }}>
+                <div style={{ maxWidth:'78%', padding:'11px 15px', borderRadius:'14px 14px 14px 3px', background:COLORS.smoke, color:COLORS.ink, fontSize:12.5 }}>
+                  <Icon name="loader-2" size={14} className="spin" />
+                </div>
+              </div>
+            )}
+          </div>
+          <form onSubmit={e=>{e.preventDefault(); ask(input);}} style={{ borderTop:`1px solid ${COLORS.border}`, padding:14, display:'flex', gap:10 }}>
+            <input className="input" placeholder="Ex: Qual o status da OS 9668?" value={input} onChange={e=>setInput(e.target.value)} disabled={loading} />
+            <button type="submit" className="btn-primary" disabled={!input.trim() || loading} style={{ padding:'0 18px' }}><Icon name="send" size={15}/></button>
+          </form>
+        </div>
+
+        {showHistory && (
+          <div className="card" style={{ padding:16, display:'flex', flexDirection:'column', gap:12, maxHeight:500, overflow:'hidden' }}>
+            <div style={{ fontSize:11, fontWeight:800, textTransform:'uppercase', color:COLORS.muted }}>Histórico de Perguntas</div>
+            <div className="scroll-y" style={{ flex:1, display:'flex', flexDirection:'column', gap:8 }}>
+              {history.map((h, i) => (
+                <div 
+                  key={i} 
+                  onClick={() => {
+                    setInput(h.question);
+                    setShowHistory(false);
+                  }}
+                  style={{ 
+                    padding:10, 
+                    background:COLORS.smoke, 
+                    borderRadius:6, 
+                    cursor:'pointer', 
+                    fontSize:11, 
+                    fontWeight:600,
+                    transition:'all .2s',
+                    border:`1px solid ${COLORS.border}`
+                  }}
+                  onMouseEnter={e => e.target.style.background = COLORS.border}
+                  onMouseLeave={e => e.target.style.background = COLORS.smoke}
+                >
+                  {h.question.substring(0, 40)}...
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
