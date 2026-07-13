@@ -156,7 +156,8 @@ const usePartsStatus = () => {
       snap.docs.forEach(doc => {
         const data = doc.data();
         if (!data.os) return;
-        const cleanOS = String(data.os).replace(/\D/g, '');
+        // Normalização agressiva: remove zeros à esquerda e caracteres não numéricos
+        const cleanOS = String(data.os).replace(/\D/g, '').replace(/^0+/, '');
         if (!grouped[cleanOS]) grouped[cleanOS] = [];
         
         if (data.items && Array.isArray(data.items)) {
@@ -616,7 +617,7 @@ function PartsStatus({ os }) {
     setLoading(true);
     
     // Normalização radical da OS
-    const cleanOS = String(os).replace(/\D/g, ''); // Apenas números
+    const cleanOS = String(os).replace(/\D/g, '').replace(/^0+/, '');
     const osNum = parseInt(cleanOS, 10);
     const osStr = cleanOS;
 
@@ -627,7 +628,7 @@ function PartsStatus({ os }) {
       let allItems = [];
       snap.docs.forEach(doc => {
         const data = doc.data();
-        const docOS = String(data.os || '').replace(/\D/g, '');
+        const docOS = String(data.os || '').replace(/\D/g, '').replace(/^0+/, '');
         
         // Compara a OS limpa (sem zeros à esquerda, sem caracteres especiais)
         if (docOS === osStr || parseInt(docOS, 10) === osNum) {
@@ -710,9 +711,6 @@ function PartsStatus({ os }) {
                 <Icon name="calendar" size={10} /> {item.previsao}
               </div>
             )}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              <Icon name="user" size={10} /> {item.responsavel}
-            </div>
           </div>
         </div>
       ))}
@@ -789,7 +787,7 @@ function GenericTableView({ vehicles, role, title, subtitle, columns, initialExp
   const { allParts, loading: partsLoading } = usePartsStatus();
 
   const getConsolidatedStatus = (os) => {
-    const cleanOS = String(os).replace(/\D/g, '');
+    const cleanOS = String(os).replace(/\D/g, '').replace(/^0+/, '');
     const parts = allParts[cleanOS] || [];
     if (parts.length === 0) return { label: 'Sem Pendencia de Peças', color: COLORS.muted, bg: COLORS.smoke, border: COLORS.border };
     
@@ -1099,16 +1097,14 @@ function OperacionalView({ vehicles, role }){
 function ComercialView({ vehicles, role, user }){
   const isMaster = role === 'master';
   
-  const vehiclesWithComercial = vehicles.map(v => ({
+  const vehiclesWithComercial = useMemo(() => vehicles.map(v => ({
     ...v,
     dataContratual: calculateDataContratual(v.dataAt, v.dataKitVidro),
     dataIndicativa: v.previsaoEntrega,
-  }));
+  })), [vehicles]);
 
-  const base = role==='comercial' ? vehiclesWithComercial.filter(v=>v.vendedor===user.vendedor) : vehiclesWithComercial;
-  
   return <GenericTableView 
-    vehicles={base} 
+    vehicles={vehiclesWithComercial} 
     role={role} 
     title="Visão Comercial" 
     subtitle={`Acompanhamento de vendas e prazos${role==='comercial' ? ' — vendedor: '+user.vendedor : ''}`} 
@@ -1621,16 +1617,23 @@ function App(){
     return s ? JSON.parse(s) : null;
   });
   const [view, setView] = useState('dashboard');
-  const { data:vehicles, loading:vLoading } = useFirestore('vehicles');
+  const { data:rawVehicles, loading:vLoading } = useFirestore('vehicles');
   const { data:users, loading:uLoading } = useFirestore('users');
   const { data:history } = useFirestore('uploads');
 
   const onLogin = (u) => { setUser(u); localStorage.setItem('semaforo_session', JSON.stringify(u)); };
   const onLogout = () => { setUser(null); localStorage.removeItem('semaforo_session'); };
 
-  if(!user) return <LoginView users={users} onLogin={onLogin} />;
+  // Forçar login se não houver usuário na sessão
+  if(!user || uLoading) return <LoginView users={users} onLogin={onLogin} />;
 
   const role = user.role;
+
+  // Filtro de segurança: Vendedores só veem seus próprios veículos em TODAS as visões
+  const vehicles = useMemo(() => {
+    if (role === 'master' || role === 'operacional') return rawVehicles;
+    return rawVehicles.filter(v => v.vendedor === user.vendedor);
+  }, [rawVehicles, role, user.vendedor]);
   const NavItem = ({ id, icon, label }) => (
     <button className={`nav-item ${view===id?'active':''}`} onClick={()=>setView(id)}>
       <div className="nav-icon"><Icon name={icon} size={16} /></div>
@@ -1651,7 +1654,7 @@ function App(){
         
         <div style={{ flex:1, display:'flex', flexDirection:'column', gap:6 }}>
           <NavItem id="dashboard" icon="layout-dashboard" label="Dashboard" />
-          <NavItem id="operacional" icon="settings" label="Visão Operacional" />
+          {(role === 'master' || role === 'operacional') && <NavItem id="operacional" icon="settings" label="Visão Operacional" />}
           <NavItem id="comercial" icon="briefcase" label="Visão Comercial" />
           <NavItem id="chat" icon="sparkles" label="Consulta IA" />
           {role==='master' && (
