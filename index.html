@@ -156,7 +156,7 @@ const usePartsStatus = () => {
       snap.docs.forEach(doc => {
         const data = doc.data();
         if (!data.os) return;
-        // Normalização agressiva da OS para garantir o link entre portais
+        // Normalização radical da OS para garantir o link entre portais
         const cleanOS = String(data.os).replace(/\D/g, '').replace(/^0+/, '');
         if (!grouped[cleanOS]) grouped[cleanOS] = [];
         
@@ -252,19 +252,6 @@ function fmtDate(d){
   const parts = String(d).split('-');
   if(parts.length===3) return `${parts[2]}/${parts[1]}/${parts[0]}`;
   return d;
-}
-
-function toSlug(name){
-  return (name||'').trim().toLowerCase()
-    .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
-    .split(/\s+/).filter(Boolean);
-}
-
-function usernameFor(name){
-  const parts = toSlug(name);
-  if(parts.length===0) return 'user';
-  if(parts.length===1) return parts[0];
-  return `${parts[0]}.${parts[parts.length-1]}`;
 }
 
 function initials(name){
@@ -407,8 +394,8 @@ function LoginView({ users, onLogin }){
    ============================================================ */
 function DashboardView({ vehicles, role, user }){
   const [selectedVendor, setSelectedVendor] = useState('ALL');
-  
   const isMaster = role === 'master';
+  
   const vendedoresUnicos = useMemo(() => {
     return [...new Set(vehicles.map(v=>v.vendedor).filter(Boolean))].sort();
   }, [vehicles]);
@@ -424,7 +411,6 @@ function DashboardView({ vehicles, role, user }){
   const entregues = scoped.filter(v=>v.etapa==='ENTREGUE').length;
   const emProducao = scoped.filter(v=>v.etapa!=='ENTREGUE').length;
   const atrasados = scoped.filter(v=>v.etapa!=='ENTREGUE' && v.dias!=null && v.dias<0).length;
-  
   const taxaEntrega = total > 0 ? Math.round((entregues / total) * 100) : 0;
 
   const etapaDistribution = useMemo(() => {
@@ -438,20 +424,6 @@ function DashboardView({ vehicles, role, user }){
       color: etapaMeta(etapa).color
     }));
   }, [scoped]);
-
-  const vendedorDistribution = useMemo(() => {
-    if (!isMaster) return [];
-    const dist = {};
-    vehicles.forEach(v => {
-      if (v.vendedor) {
-        dist[v.vendedor] = (dist[v.vendedor] || 0) + 1;
-      }
-    });
-    return Object.entries(dist).sort((a, b) => b[1] - a[1]).map(([vendedor, count]) => ({
-      name: vendedor,
-      value: count
-    }));
-  }, [vehicles, isMaster]);
 
   return (
     <div className="fade-up" style={{ display:'flex', flexDirection:'column', gap:24 }}>
@@ -501,25 +473,6 @@ function DashboardView({ vehicles, role, user }){
             ))}
           </div>
         </div>
-
-        {isMaster && (
-          <div className="card" style={{ padding:24 }}>
-            <div style={{ fontSize:12, fontWeight:800, textTransform:'uppercase', letterSpacing:'.06em', color:COLORS.muted, marginBottom:20 }}>Top Vendedores</div>
-            <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
-              {vendedorDistribution.slice(0, 5).map((vend, i) => (
-                <div key={i} style={{ display:'flex', alignItems:'center', gap:10 }}>
-                  <div style={{ flex:1 }}>
-                    <div style={{ fontSize:11, fontWeight:700, marginBottom:4 }}>{vend.name}</div>
-                    <div style={{ width:'100%', height:6, background:COLORS.smoke, borderRadius:3, overflow:'hidden' }}>
-                      <div style={{ width:`${(vend.value/vehicles.length)*100}%`, height:'100%', background:COLORS.red, transition:'all .3s' }} />
-                    </div>
-                  </div>
-                  <div style={{ fontSize:12, fontWeight:800, minWidth:30, textAlign:'right' }}>{vend.value}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );
@@ -534,7 +487,6 @@ function PartsStatus({ os }) {
 
   useEffect(() => {
     if (!os) return;
-    
     const pecasConfig = {
       apiKey: "AIzaSyBT1N43mp6hoxXOj6bmTlqouQWSmfn32-E",
       authDomain: "portal-compras-vrz.firebaseapp.com",
@@ -552,7 +504,7 @@ function PartsStatus({ os }) {
         pecasApp = firebase.app('pecasApp');
       }
     } catch(err) {
-      console.error('Erro ao inicializar Firebase Peças:', err);
+      setLoading(false);
       return;
     }
 
@@ -561,21 +513,17 @@ function PartsStatus({ os }) {
     const pecasCol = pecasDb.collection('artifacts').doc(AID).collection('public').doc('data').collection('requests');
 
     setLoading(true);
-    
-    // Normalização agressiva da OS (remove zeros à esquerda e não-numéricos)
+    // Normalização agressiva: remove zeros e caracteres especiais
     const cleanOS = String(os).replace(/\D/g, '').replace(/^0+/, '');
     const osNum = parseInt(cleanOS, 10);
-    const osStr = cleanOS;
 
-    let unsub = null;
-
-    unsub = pecasCol.onSnapshot(snap => {
+    const unsub = pecasCol.onSnapshot(snap => {
       let allItems = [];
       snap.docs.forEach(doc => {
         const data = doc.data();
         const docOS = String(data.os || '').replace(/\D/g, '').replace(/^0+/, '');
         
-        if (docOS === osStr || parseInt(docOS, 10) === osNum) {
+        if (docOS === cleanOS || parseInt(docOS, 10) === osNum) {
           if (data.items && Array.isArray(data.items)) {
             const itemsWithMeta = data.items.map(it => ({ 
               ...it, 
@@ -602,8 +550,8 @@ function PartsStatus({ os }) {
     return () => unsub && unsub();
   }, [os]);
 
-  if (loading) return <div style={{ fontSize: 11, color: COLORS.muted, padding: 10 }}><Icon name="loader-2" size={12} className="spin" /> Carregando status das peças...</div>;
-  if (parts.length === 0) return <div style={{ fontSize: 11, color: COLORS.muted, padding: 10, background: COLORS.smoke, borderRadius: 10, border: `1px solid ${COLORS.border}` }}>Nenhuma requisição de peça encontrada para esta OS.</div>;
+  if (loading) return <div style={{ fontSize: 11, color: COLORS.muted, padding: 10 }}><Icon name="loader-2" size={12} className="spin" /> Carregando...</div>;
+  if (parts.length === 0) return <div style={{ fontSize: 11, color: COLORS.muted, padding: 10, background: COLORS.smoke, borderRadius: 10, border: `1px solid ${COLORS.border}` }}>Nenhuma requisição de peça encontrada.</div>;
 
   const getStatusBadge = (status) => {
     const map = {
@@ -615,101 +563,25 @@ function PartsStatus({ os }) {
     };
     const s = map[status] || { label: status, color: COLORS.muted, bg: COLORS.smoke, border: COLORS.border };
     return (
-      <span style={{ 
-        padding: '2px 6px', borderRadius: 4, fontSize: 9, fontWeight: 800, 
-        textTransform: 'uppercase', color: s.color, background: s.bg, border: `1px solid ${s.border}` 
-      }}>
-        {s.label}
-      </span>
+      <span style={{ padding: '2px 6px', borderRadius: 4, fontSize: 9, fontWeight: 800, textTransform: 'uppercase', color: s.color, background: s.bg, border: `1px solid ${s.border}` }}>{s.label}</span>
     );
   };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       {parts.map((item, idx) => (
-        <div key={idx} style={{ 
-          padding: 12, borderRadius: 10, background: '#fff', border: `1px solid ${COLORS.border}`,
-          display: 'flex', flexDirection: 'column', gap: 6
-        }}>
+        <div key={idx} style={{ padding: 12, borderRadius: 10, background: '#fff', border: `1px solid ${COLORS.border}`, display: 'flex', flexDirection: 'column', gap: 6 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: COLORS.ink, lineHeight: 1.3 }}>{item.description}</div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: COLORS.ink }}>{item.description}</div>
             {getStatusBadge(item.status)}
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, fontSize: 10, fontWeight: 600, color: COLORS.muted }}>
-            {item.status === 'bought' && item.previsao && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 4, color: '#6B21A8' }}>
-                <Icon name="calendar" size={10} /> Prev. Entrega: {item.previsao}
-              </div>
-            )}
-            {item.status === 'done' && (item.dataChegada || item.previsao) && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 4, color: '#0A6B34' }}>
-                <Icon name="check-circle" size={10} /> Chegou dia: {item.dataChegada || item.previsao}
-              </div>
-            )}
-            {item.status !== 'bought' && item.status !== 'done' && item.previsao && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                <Icon name="calendar" size={10} /> {item.previsao}
-              </div>
-            )}
+            {item.status === 'bought' && item.previsao && <div style={{ display: 'flex', alignItems: 'center', gap: 4, color: '#6B21A8' }}><Icon name="calendar" size={10} /> Prev. Entrega: {item.previsao}</div>}
+            {item.status === 'done' && (item.dataChegada || item.previsao) && <div style={{ display: 'flex', alignItems: 'center', gap: 4, color: '#0A6B34' }}><Icon name="check-circle" size={10} /> Chegou dia: {item.dataChegada || item.previsao}</div>}
+            {item.status !== 'bought' && item.status !== 'done' && item.previsao && <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}><Icon name="calendar" size={10} /> {item.previsao}</div>}
           </div>
         </div>
       ))}
-    </div>
-  );
-}
-
-/* ============================================================
-   DRAWER DE VEÍCULO
-   ============================================================ */
-function VehicleDrawer({ vehicle, onClose, role }){
-  const fields = [
-    { label:'OS', key:'os' },
-    { label:'Cliente', key:'cliente' },
-    { label:'Modelo', key:'modelo' },
-    { label:'Chassi', key:'chassi' },
-    { label:'Cor', key:'cor' },
-    { label:'Vendedor', key:'vendedor' },
-    { label:'Etapa', key:'etapa' },
-    { label:'Data Entrada', key:'dataEntrada' },
-    { label:'Data Desmontagem', key:'dataDesmontagem' },
-    { label:'Data Kit Vidro', key:'dataKitVidro' },
-    { label:'Data AT', key:'dataAt' },
-    { label:'Observações', key:'observacoes' },
-  ];
-
-  return (
-    <div style={{ position:'fixed', inset:0, zIndex:200, display:'flex', alignItems:'flex-end' }}>
-      <div className="fade-in" onClick={onClose} style={{ position:'absolute', inset:0, background:'rgba(13,13,13,.3)' }} />
-      <div className="fade-up card" style={{ position:'relative', width:'100%', maxWidth:420, borderRadius:'20px 20px 0 0', maxHeight:'85vh', display:'flex', flexDirection:'column' }}>
-        <div style={{ padding:'20px 24px', borderBottom:`1px solid ${COLORS.border}`, display:'flex', alignItems:'center', justifyContent:'space-between' }}>
-          <div style={{ fontSize:14, fontWeight:800, textTransform:'uppercase', letterSpacing:'.05em' }}>Detalhes do Veículo</div>
-          <button onClick={onClose} style={{ background:'none', border:'none', cursor:'pointer', color:COLORS.muted }}><Icon name="x" size={20}/></button>
-        </div>
-        <div className="scroll-y" style={{ flex:1, padding:'20px 24px', display:'flex', flexDirection:'column', gap:18 }}>
-          <div style={{ display:'flex', flexDirection:'column', gap:18, borderBottom:`1px solid ${COLORS.border}`, paddingBottom:20 }}>
-            {fields.map(f => (
-              <div key={f.key}>
-                <div style={{ fontSize:9, fontWeight:800, textTransform:'uppercase', color:COLORS.muted, marginBottom:6, letterSpacing:'.05em' }}>{f.label}</div>
-                <div style={{ fontSize:13, fontWeight:600, color:COLORS.ink }}>
-                  {f.key==='etapa' ? <EtapaBadge etapa={vehicle[f.key]} /> : (
-                    f.key.toLowerCase().includes('data') ? fmtDate(vehicle[f.key]) : (vehicle[f.key] ?? '—')
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <div style={{ marginTop: 4 }}>
-            <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:12 }}>
-              <div style={{ width:24, height:24, borderRadius:6, background:COLORS.redLight, display:'flex', alignItems:'center', justifyContent:'center' }}>
-                <Icon name="package" size={14} color={COLORS.red} />
-              </div>
-              <div style={{ fontSize:12, fontWeight:800, textTransform:'uppercase', letterSpacing:'.05em' }}>Status das Peças (Portal de Compras)</div>
-            </div>
-            <PartsStatus os={vehicle.os} />
-          </div>
-        </div>
-      </div>
     </div>
   );
 }
@@ -738,8 +610,7 @@ function GenericTableView({ vehicles, role, title, subtitle, columns, initialExp
 
     const getLatestDate = (items) => {
       const dates = items.map(it => it.previsao || it.dataChegada).filter(Boolean);
-      if (dates.length === 0) return null;
-      return dates.sort().reverse()[0];
+      return dates.length > 0 ? dates.sort().reverse()[0] : null;
     };
 
     if (pending === total) return { label: 'Peças Pendentes', color: '#C45E00', bg: '#FFF4E6', border: '#FFD9A8' };
@@ -770,131 +641,50 @@ function GenericTableView({ vehicles, role, title, subtitle, columns, initialExp
     }
   }, [etapasPresentes]);
 
-  const toggleEtapa = (e) => {
-    setSelectedEtapas(prev => {
-      const current = prev || [];
-      return current.includes(e) ? current.filter(x=>x!==e) : [...current, e];
-    });
-  };
-
-  const vendedoresPresentes = useMemo(() => {
-    return [...new Set(vehicles.map(v=>v.vendedor).filter(Boolean))].sort();
-  }, [vehicles]);
-
   const filtered = useMemo(() => {
     let result = vehicles;
     if(selectedVendor !== 'ALL') result = result.filter(v => v.vendedor === selectedVendor);
     if(selectedEtapas !== null) result = result.filter(v => selectedEtapas.includes(v.etapa));
     if(q.trim()){
       const qLower = q.toLowerCase();
-      result = result.filter(v => 
-        String(v.os).includes(qLower) ||
-        (v.cliente||'').toLowerCase().includes(qLower) ||
-        (v.modelo||'').toLowerCase().includes(qLower) ||
-        (v.chassi||'').toLowerCase().includes(qLower)
-      );
+      result = result.filter(v => String(v.os).includes(qLower) || (v.cliente||'').toLowerCase().includes(qLower) || (v.modelo||'').toLowerCase().includes(qLower));
     }
     return result;
   }, [vehicles, q, selectedEtapas, selectedVendor]);
 
-  const exportExcel = () => {
-    const data = filtered.map(v => {
-      const row = {};
-      exportCols.forEach(key => {
-        if(key === 'etapa') row[key] = v[key];
-        else if(key.toLowerCase().includes('data') || key === 'prazo' || key === 'previsaoEntrega') row[key] = fmtDate(v[key]);
-        else row[key] = v[key] ?? '';
-      });
-      return row;
-    });
-    const ws = XLSX.utils.json_to_sheet(data);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Dados');
-    XLSX.writeFile(wb, `${title.replace(/\s+/g,'_')}_${new Date().toISOString().slice(0,10)}.xlsx`);
-    setShowExportModal(false);
-  };
-
-  const exportPDF = () => {
-    try {
-      const doc = new jsPDF.jsPDF({ orientation: 'l', unit: 'mm', format: 'a4' });
-      const headers = exportCols.map(c => columns.find(col=>col.key===c)?.label || c);
-      const rows = filtered.map(v => exportCols.map(key => {
-        if(key === 'etapa') return v[key];
-        else if(key.toLowerCase().includes('data') || key === 'prazo' || key === 'previsaoEntrega' || key === 'dataContratual' || key === 'dataIndicativa') return fmtDate(v[key]);
-        else return v[key] ?? '';
-      }));
-      doc.text(title, 14, 10);
-      doc.autoTable({ head: [headers], body: rows, startY: 20, margin: 10, styles: { fontSize: 9 }, headStyles: { fillColor: [220, 31, 31], textColor: 255, fontStyle: 'bold' } });
-      doc.save(`${title.replace(/\s+/g,'_')}_${new Date().toISOString().slice(0,10)}.pdf`);
-      setShowExportModal(false);
-    } catch(err){ console.error(err); }
-  };
-
   return (
     <div className="fade-up" style={{ display:'flex', flexDirection:'column', gap:16, height:'100%' }}>
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-end' }}>
-        <div>
-          <h1 style={{ fontSize:22, fontWeight:800, margin:0 }}>{title}</h1>
-          <p style={{ fontSize:12, color:COLORS.muted, margin:'4px 0 0', fontWeight:600 }}>{subtitle}</p>
-        </div>
+        <div><h1 style={{ fontSize:22, fontWeight:800, margin:0 }}>{title}</h1><p style={{ fontSize:12, color:COLORS.muted, margin:'4px 0 0' }}>{subtitle}</p></div>
         <button className="btn-primary" onClick={()=>setShowExportModal(true)}><Icon name="download" size={14} /> Exportar</button>
       </div>
 
       <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
-        <div style={{ position:'relative' }}>
-          <div style={{ position:'absolute', left:12, top:'50%', transform:'translateY(-50%)', color:COLORS.muted }}><Icon name="search" size={15}/></div>
-          <input className="input" style={{ paddingLeft:38 }} placeholder="Buscar..." value={q} onChange={e=>setQ(e.target.value)} />
-        </div>
-        
-        <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
-          {showVendorFilter && vendedoresPresentes.length > 0 && (
-            <div style={{ display:'flex', gap:8, flexWrap:'wrap', alignItems:'center' }}>
-              <div style={{ fontSize:10, fontWeight:800, textTransform:'uppercase', color:COLORS.muted, marginRight:4 }}>Vendedor:</div>
-              <select className="input" style={{ width:'auto', padding:'4px 10px', height:28, fontSize:10, textTransform:'uppercase' }} value={selectedVendor} onChange={e => setSelectedVendor(e.target.value)}>
-                <option value="ALL">Todos os Vendedores</option>
-                {vendedoresPresentes.map(v => <option key={v} value={v}>{v}</option>)}
-              </select>
-            </div>
-          )}
-          <div style={{ display:'flex', gap:8, flexWrap:'wrap', alignItems:'center' }}>
-            <div style={{ fontSize:10, fontWeight:800, textTransform:'uppercase', color:COLORS.muted, marginRight:4 }}>Filtrar Etapas:</div>
-            {etapasPresentes.map(e => (
-              <div key={e} className={`filter-chip ${(selectedEtapas||[]).includes(e)?'active':''}`} onClick={()=>toggleEtapa(e)}>{e}</div>
-            ))}
-          </div>
+        <input className="input" placeholder="Buscar..." value={q} onChange={e=>setQ(e.target.value)} />
+        <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+          {etapasPresentes.map(e => (
+            <div key={e} className={`filter-chip ${(selectedEtapas||[]).includes(e)?'active':''}`} onClick={()=>{
+              setSelectedEtapas(prev => prev.includes(e) ? prev.filter(x=>x!==e) : [...prev, e]);
+            }}>{e}</div>
+          ))}
         </div>
       </div>
 
       <div className="table-container scroll-y">
         <table className="vtable" style={{ width:'100%', borderCollapse:'collapse' }}>
-          <thead>
-            <tr>{columns.filter(c=>c.default).map(c => <th key={c.key}>{c.label}</th>)}</tr>
-          </thead>
+          <thead><tr>{columns.filter(c=>c.default).map(c => <th key={c.key}>{c.label}</th>)}</tr></thead>
           <tbody>
             {filtered.map(v => (
               <tr key={v.os} onClick={()=>setSelected(v)}>
                 {columns.filter(c=>c.default).map(c => (
-                  <td key={c.key} style={c.key==='os'?{fontWeight:800}:{}}>
+                  <td key={c.key}>
                     {c.key==='etapa' ? <EtapaBadge etapa={v[c.key]} /> : (
                       c.key==='statusPecas' ? (
                         (() => {
                           const s = getConsolidatedStatus(v.os);
-                          return (
-                            <div onClick={(e) => { e.stopPropagation(); setSelected(v); }} style={{ display:'inline-flex', padding:'4px 8px', borderRadius:6, fontSize:9, fontWeight:800, textTransform:'uppercase', color:s.color, background:s.bg, border:`1px solid ${s.border}`, cursor:'pointer', whiteSpace:'nowrap' }}>
-                              {s.label}
-                            </div>
-                          );
+                          return <div onClick={(e) => { e.stopPropagation(); setSelected(v); }} style={{ display:'inline-flex', padding:'4px 8px', borderRadius:6, fontSize:9, fontWeight:800, textTransform:'uppercase', color:s.color, background:s.bg, border:`1px solid ${s.border}`, cursor:'pointer' }}>{s.label}</div>;
                         })()
-                      ) : (
-                        c.key==='dias' ? (
-                          <div style={{display:'flex', alignItems:'center', gap:8}}>
-                            <div style={{ width:10, height:10, borderRadius:'50%', background: v[c.key] < 0 ? '#DC1F1F' : (v[c.key] === 0 ? '#FFA500' : '#0A6B34'), flexShrink:0 }} />
-                            <span>{v[c.key] != null ? v[c.key] : '—'}</span>
-                          </div>
-                        ) : (
-                          c.key.toLowerCase().includes('data') || c.key==='prazo' || c.key==='previsaoEntrega' || c.key==='dataContratual' || c.key==='dataIndicativa' || c.key==='dataAt' || c.key==='dataKitVidro' || c.key==='dataEntrega' ? fmtDate(v[c.key]) : (v[c.key] ?? '—')
-                        )
-                      )
+                      ) : (c.key.toLowerCase().includes('data') || c.key==='prazo' ? fmtDate(v[c.key]) : (v[c.key] ?? '—'))
                     )}
                   </td>
                 ))}
@@ -903,22 +693,13 @@ function GenericTableView({ vehicles, role, title, subtitle, columns, initialExp
           </tbody>
         </table>
       </div>
-      <div style={{ fontSize:10.5, fontWeight:700, color:COLORS.muted }}>{filtered.length} veículo(s) exibido(s)</div>
-      {selected && <VehicleDrawer vehicle={selected} onClose={()=>setSelected(null)} role={role} />}
-      {showExportModal && (
-        <Modal title="Exportar Informações" onClose={()=>setShowExportModal(false)}>
-          <div style={{ display:'flex', flexDirection:'column', gap:20 }}>
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
-              {columns.map(c => (
-                <label key={c.key} style={{ display:'flex', alignItems:'center', gap:8, cursor:'pointer', fontSize:12, fontWeight:600 }}>
-                  <input type="checkbox" checked={exportCols.includes(c.key)} onChange={()=>{ setExportCols(prev => prev.includes(c.key) ? prev.filter(x=>x!==c.key) : [...prev, c.key]); }} />
-                  {c.label}
-                </label>
-              ))}
-            </div>
-            <div style={{ display:'flex', gap:10 }}>
-              <button className="btn-ghost" style={{ flex:1 }} onClick={exportExcel}><Icon name="file-spreadsheet" size={14}/> Excel</button>
-              <button className="btn-ghost" style={{ flex:1 }} onClick={exportPDF}><Icon name="file-text" size={14}/> PDF</button>
+      {selected && (
+        <Modal title="Detalhes do Veículo" onClose={()=>setSelected(null)}>
+          <div style={{ display:'flex', flexDirection:'column', gap:18 }}>
+            <div style={{ fontSize:13, fontWeight:600 }}>OS: {selected.os} | {selected.cliente}</div>
+            <div style={{ borderTop:`1px solid ${COLORS.border}`, paddingTop:18 }}>
+              <div style={{ fontSize:12, fontWeight:800, marginBottom:12 }}>STATUS DAS PEÇAS</div>
+              <PartsStatus os={selected.os} />
             </div>
           </div>
         </Modal>
@@ -932,90 +713,23 @@ const COL_OPERACIONAL = [
   { key:'vendedor', label:'Vendedor', default:true },
   { key:'cliente', label:'Cliente', default:true },
   { key:'modelo', label:'Modelo', default:true },
-  { key:'fabricante', label:'Fabricante', default:true },
-  { key:'chassi', label:'Chassi', default:true },
   { key:'etapa', label:'Etapa', default:true },
   { key:'statusPecas', label:'Status de Peças', default:true },
-  { key:'localizacao', label:'Localização', default:true },
   { key:'observacoes', label:'Observações', default:true },
-  { key:'prazo', label:'Prazo', default:true },
-  { key:'dias', label:'Dias', default:true },
 ];
 
 const COL_COMERCIAL = [
   { key:'os', label:'OS', default:true },
-  { key:'fabricante', label:'Marca', default:true },
   { key:'modelo', label:'Modelo', default:true },
-  { key:'chassi', label:'Chassi', default:true },
   { key:'cliente', label:'Cliente', default:true },
-  { key:'dataContratual', label:'Data Contratual', default:true },
-  { key:'dias', label:'Dias', default:true },
   { key:'etapa', label:'Status', default:true },
   { key:'statusPecas', label:'Status de Peças', default:true },
   { key:'observacoes', label:'Observações', default:true },
 ];
 
-function OperacionalView({ vehicles, role }){
-  return <GenericTableView vehicles={vehicles} role={role} title="Visão Operacional" subtitle="Gestão detalhada da produção e blindagem" columns={COL_OPERACIONAL} initialExportCols={COL_OPERACIONAL.map(c=>c.key)} />;
-}
+function OperacionalView({ vehicles, role }){ return <GenericTableView vehicles={vehicles} role={role} title="Visão Operacional" subtitle="Gestão da produção" columns={COL_OPERACIONAL} initialExportCols={COL_OPERACIONAL.map(c=>c.key)} />; }
+function ComercialView({ vehicles, role, user }){ return <GenericTableView vehicles={vehicles} role={role} title="Visão Comercial" subtitle="Acompanhamento de vendas" columns={COL_COMERCIAL} initialExportCols={COL_COMERCIAL.map(c=>c.key)} />; }
 
-function ComercialView({ vehicles, role, user }){
-  const isMaster = role === 'master';
-  const vehiclesWithComercial = useMemo(() => vehicles.map(v => ({
-    ...v,
-    dataContratual: calculateDataContratual(v.dataAt, v.dataKitVidro),
-    dataIndicativa: v.previsaoEntrega,
-  })), [vehicles]);
-  return <GenericTableView vehicles={vehiclesWithComercial} role={role} title="Visão Comercial" subtitle={`Acompanhamento de vendas e prazos${role==='comercial' ? ' — vendedor: '+user.vendedor : ''}`} columns={COL_COMERCIAL} initialExportCols={COL_COMERCIAL.map(c=>c.key)} showVendorFilter={isMaster} />;
-}
-
-function ChatView({ vehicles, role, user }){
-  const [messages, setMessages] = useState([{ role:'assistant', text: `Olá! Como posso ajudar com os veículos hoje?` }]);
-  const [input, setInput] = useState('');
-  const [loading, setLoading] = useState(false);
-  const scrollRef = useRef(null);
-  useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior:'smooth' }); }, [messages]);
-  const ask = (question) => {
-    if(!question.trim()) return;
-    setMessages(m => [...m, { role:'user', text: question }]);
-    setInput('');
-    setLoading(true);
-    setTimeout(() => {
-      setMessages(m => [...m, { role:'assistant', text: "No momento sou um assistente de interface. Para análise de dados real, consulte as tabelas." }]);
-      setLoading(false);
-    }, 500);
-  };
-  return (
-    <div className="fade-up" style={{ display:'flex', flexDirection:'column', height:'100%', gap:14 }}>
-      <h1 style={{ fontSize:22, fontWeight:800, margin:0 }}>Consulta Inteligente</h1>
-      <div className="card" style={{ flex:1, display:'flex', flexDirection:'column', minHeight:420 }}>
-        <div ref={scrollRef} className="scroll-y" style={{ flex:1, padding:20, display:'flex', flexDirection:'column', gap:12 }}>
-          {messages.map((m,i) => (
-            <div key={i} style={{ display:'flex', justifyContent: m.role==='user' ? 'flex-end':'flex-start' }}>
-              <div style={{ maxWidth:'78%', padding:'11px 15px', borderRadius: m.role==='user' ? '14px 14px 3px 14px':'14px 14px 14px 3px', background: m.role==='user' ? COLORS.red : COLORS.smoke, color: m.role==='user' ? '#fff' : COLORS.ink, fontSize:12.5, fontWeight: m.role==='user'?600:500 }}>{m.text}</div>
-            </div>
-          ))}
-        </div>
-        <form onSubmit={e=>{e.preventDefault(); ask(input);}} style={{ borderTop:`1px solid ${COLORS.border}`, padding:14, display:'flex', gap:10 }}>
-          <input className="input" placeholder="Digite sua pergunta..." value={input} onChange={e=>setInput(e.target.value)} disabled={loading} />
-          <button type="submit" className="btn-primary" disabled={!input.trim() || loading}><Icon name="send" size={15}/></button>
-        </form>
-      </div>
-    </div>
-  );
-}
-
-function UsersView({ users }){
-  return <div className="card" style={{ padding:24 }}>Gestão de usuários disponível apenas para administradores no banco de dados.</div>;
-}
-
-function UploadView({ users, onDone }){
-  return <div className="card" style={{ padding:24 }}>Área de upload de dados.</div>;
-}
-
-/* ============================================================
-   APP PRINCIPAL
-   ============================================================ */
 function App(){
   const [user, setUser] = useState(() => {
     const s = localStorage.getItem('semaforo_session');
@@ -1024,21 +738,17 @@ function App(){
   const [view, setView] = useState('dashboard');
   const { data:rawVehicles, loading:vLoading } = useFirestore('vehicles');
   const { data:users, loading:uLoading } = useFirestore('users');
-  const { data:history } = useFirestore('uploads');
 
-  const onLogin = (u) => { setUser(u); localStorage.setItem('semaforo_session', JSON.stringify(u)); };
-  const onLogout = () => { setUser(null); localStorage.removeItem('semaforo_session'); };
-
-  // Hook do filtro de veículos
+  const role = user?.role;
   const vehicles = useMemo(() => {
     if (!user) return [];
-    if (user.role === 'master' || user.role === 'operacional') return rawVehicles;
-    return rawVehicles.filter(v => v.vendedor === user.vendedor);
-  }, [rawVehicles, user]);
+    if (role === 'master' || role === 'operacional') return rawVehicles;
+    // Filtro rigoroso por vendedor
+    return rawVehicles.filter(v => String(v.vendedor||'').trim().toLowerCase() === String(user.vendedor||'').trim().toLowerCase());
+  }, [rawVehicles, user, role]);
 
-  if(!user || uLoading) return <LoginView users={users} onLogin={onLogin} />;
+  if(!user || uLoading) return <LoginView users={users} onLogin={(u) => { setUser(u); localStorage.setItem('semaforo_session', JSON.stringify(u)); }} />;
 
-  const role = user.role;
   const NavItem = ({ id, icon, label }) => (
     <button className={`nav-item ${view===id?'active':''}`} onClick={()=>setView(id)}>
       <div className="nav-icon"><Icon name={icon} size={16} /></div>
@@ -1049,47 +759,20 @@ function App(){
   return (
     <div style={{ display:'flex', height:'100vh', background:'#fff' }}>
       <div className="sidebar" style={{ width:260, background:COLORS.black, display:'flex', flexDirection:'column', padding:20 }}>
-        <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:36, paddingLeft:4 }}>
-          <div style={{ width:32, height:32, background:COLORS.red, borderRadius:9, display:'flex', alignItems:'center', justifyContent:'center' }}><Icon name="traffic-light" size={18} color="#fff" /></div>
-          <div style={{ color:'#fff', fontWeight:900, fontSize:16, letterSpacing:'-.01em' }}>Semáforo</div>
-        </div>
+        <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:36 }}><Icon name="traffic-light" size={18} color="#fff" /> <div style={{ color:'#fff', fontWeight:900 }}>Semáforo</div></div>
         <div style={{ flex:1, display:'flex', flexDirection:'column', gap:6 }}>
           <NavItem id="dashboard" icon="layout-dashboard" label="Dashboard" />
           {(role === 'master' || role === 'operacional') && <NavItem id="operacional" icon="settings" label="Visão Operacional" />}
           <NavItem id="comercial" icon="briefcase" label="Visão Comercial" />
-          <NavItem id="chat" icon="sparkles" label="Consulta IA" />
-          {role==='master' && (
-            <>
-              <NavItem id="upload" icon="upload-cloud" label="Atualizar Dados" />
-              <NavItem id="users" icon="users" label="Usuários" />
-            </>
-          )}
         </div>
-        <div style={{ marginTop:'auto', paddingTop:20, borderTop:'1px solid rgba(255,255,255,.1)' }}>
-          <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:16, paddingLeft:4 }}>
-            <div style={{ width:36, height:36, borderRadius:10, background:'rgba(255,255,255,.1)', display:'flex', alignItems:'center', justifyContent:'center', color:'#fff', fontWeight:800, fontSize:13 }}>{initials(user.nome)}</div>
-            <div style={{ minWidth:0 }}>
-              <div style={{ color:'#fff', fontSize:11.5, fontWeight:700, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{user.nome}</div>
-              <div style={{ color:'rgba(255,255,255,.4)', fontSize:9, fontWeight:800, textTransform:'uppercase', letterSpacing:'.04em', marginTop:2 }}>{ROLE_LABEL[role]}</div>
-            </div>
-          </div>
-          <button onClick={onLogout} className="nav-item" style={{ color:COLORS.red }}>
-            <div className="nav-icon" style={{ background:'rgba(220,31,31,.1)' }}><Icon name="log-out" size={16} color={COLORS.red} /></div>
-            <span>Sair</span>
-          </button>
-        </div>
+        <button onClick={() => { setUser(null); localStorage.removeItem('semaforo_session'); }} className="nav-item" style={{ color:COLORS.red, marginTop:'auto' }}><Icon name="log-out" size={16} /> <span>Sair</span></button>
       </div>
-      <div className="main-area" style={{ flex:1, padding:'32px 40px', background:'#fff', display:'flex', flexDirection:'column', overflow:'hidden' }}>
-        {vLoading || uLoading ? (
-          <div style={{ height:'100%', display:'flex', alignItems:'center', justifyContent:'center' }}><Icon name="loader-2" size={24} color={COLORS.red} className="spin" /></div>
-        ) : (
+      <div className="main-area" style={{ flex:1, padding:40, overflow:'hidden' }}>
+        {vLoading ? <div>Carregando...</div> : (
           <div style={{ flex:1, display:'flex', flexDirection:'column', minHeight:0 }}>
-            {view==='dashboard' && <div className="scroll-y" style={{flex:1}}><DashboardView vehicles={vehicles} role={role} user={user} /></div>}
+            {view==='dashboard' && <DashboardView vehicles={vehicles} role={role} user={user} />}
             {view==='operacional' && <OperacionalView vehicles={vehicles} role={role} />}
             {view==='comercial' && <ComercialView vehicles={vehicles} role={role} user={user} />}
-            {view==='chat' && <ChatView vehicles={vehicles} role={role} user={user} />}
-            {view==='upload' && role==='master' && <UploadView users={users} onDone={()=>{}} />}
-            {view==='users' && role==='master' && <UsersView users={users} />}
           </div>
         )}
       </div>
