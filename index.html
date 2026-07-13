@@ -1624,16 +1624,15 @@ function App(){
   const onLogin = (u) => { setUser(u); localStorage.setItem('semaforo_session', JSON.stringify(u)); };
   const onLogout = () => { setUser(null); localStorage.removeItem('semaforo_session'); };
 
+  // Hooks devem vir ANTES de qualquer return condicional
+  const role = user?.role;
+  const vehicles = useMemo(() => {
+    if (!user || role === 'master' || role === 'operacional') return rawVehicles;
+    return rawVehicles.filter(v => v.vendedor === user.vendedor);
+  }, [rawVehicles, role, user]);
+
   // Forçar login se não houver usuário na sessão
   if(!user || uLoading) return <LoginView users={users} onLogin={onLogin} />;
-
-  const role = user.role;
-
-  // Filtro de segurança: Vendedores só veem seus próprios veículos em TODAS as visões
-  const vehicles = useMemo(() => {
-    if (role === 'master' || role === 'operacional') return rawVehicles;
-    return rawVehicles.filter(v => v.vendedor === user.vendedor);
-  }, [rawVehicles, role, user.vendedor]);
   const NavItem = ({ id, icon, label }) => (
     <button className={`nav-item ${view===id?'active':''}`} onClick={()=>setView(id)}>
       <div className="nav-icon"><Icon name={icon} size={16} /></div>
