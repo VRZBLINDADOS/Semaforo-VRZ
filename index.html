@@ -121,66 +121,6 @@ const useFirestore=(collectionName)=>{
   return{data,loading,error};
 };
 
-const usePartsStatus = () => {
-  const [allParts, setAllParts] = useState({});
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const pecasConfig = {
-      apiKey: "AIzaSyBT1N43mp6hoxXOj6bmTlqouQWSmfn32-E",
-      authDomain: "portal-compras-vrz.firebaseapp.com",
-      projectId: "portal-compras-vrz",
-      storageBucket: "portal-compras-vrz.firebasestorage.app",
-      messagingSenderId: "713014398002",
-      appId: "1:713014398002:web:d89f485af020178b00002b"
-    };
-
-    let pecasApp;
-    try {
-      if (!firebase.apps.find(app => app.name === 'pecasApp')) {
-        pecasApp = firebase.initializeApp(pecasConfig, 'pecasApp');
-      } else {
-        pecasApp = firebase.app('pecasApp');
-      }
-    } catch(err) {
-      setLoading(false);
-      return;
-    }
-
-    const pecasDb = pecasApp.firestore();
-    const AID = 'portal-compras-vrz';
-    const pecasCol = pecasDb.collection('artifacts').doc(AID).collection('public').doc('data').collection('requests');
-
-    const unsub = pecasCol.onSnapshot(snap => {
-      const grouped = {};
-      snap.docs.forEach(doc => {
-        const data = doc.data();
-        if (!data.os) return;
-        const cleanOS = String(data.os).replace(/\D/g, '');
-        if (!grouped[cleanOS]) grouped[cleanOS] = [];
-        
-        if (data.items && Array.isArray(data.items)) {
-          const itemsWithMeta = data.items.map(it => ({ 
-            ...it, 
-            responsavel: data.responsavel, 
-            timestamp: data.timestamp?.toDate ? data.timestamp.toDate() : data.timestamp 
-          }));
-          grouped[cleanOS] = [...grouped[cleanOS], ...itemsWithMeta];
-        }
-      });
-      setAllParts(grouped);
-      setLoading(false);
-    }, err => {
-      console.error('Erro ao buscar todas as peças:', err);
-      setLoading(false);
-    });
-
-    return () => unsub();
-  }, []);
-
-  return { allParts, loading };
-};
-
 function stripUndefined(obj){
   if(Array.isArray(obj))return obj.map(stripUndefined);
   if(obj!==null&&typeof obj==='object'){
@@ -695,17 +635,7 @@ function PartsStatus({ os }) {
             {getStatusBadge(item.status)}
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, fontSize: 10, fontWeight: 600, color: COLORS.muted }}>
-            {item.status === 'bought' && item.previsao && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 4, color: '#6B21A8' }}>
-                <Icon name="calendar" size={10} /> Prev. Entrega: {item.previsao}
-              </div>
-            )}
-            {item.status === 'done' && (item.dataChegada || item.previsao) && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 4, color: '#0A6B34' }}>
-                <Icon name="check-circle" size={10} /> Chegou dia: {item.dataChegada || item.previsao}
-              </div>
-            )}
-            {item.status !== 'bought' && item.status !== 'done' && item.previsao && (
+            {item.previsao && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                 <Icon name="calendar" size={10} /> {item.previsao}
               </div>
@@ -786,40 +716,6 @@ function GenericTableView({ vehicles, role, title, subtitle, columns, initialExp
   const [selected, setSelected] = useState(null);
   const [showExportModal, setShowExportModal] = useState(false);
   const [exportCols, setExportCols] = useState(initialExportCols);
-  const { allParts, loading: partsLoading } = usePartsStatus();
-
-  const getConsolidatedStatus = (os) => {
-    const cleanOS = String(os).replace(/\D/g, '');
-    const parts = allParts[cleanOS] || [];
-    if (parts.length === 0) return { label: 'Sem Pendencia de Peças', color: COLORS.muted, bg: COLORS.smoke, border: COLORS.border };
-    
-    const total = parts.length;
-    const pending = parts.filter(p => p.status === 'pending' || p.status === 'quoting').length;
-    const bought = parts.filter(p => p.status === 'bought').length;
-    const done = parts.filter(p => p.status === 'done').length;
-
-    const getLatestDate = (items) => {
-      const dates = items.map(it => it.previsao || it.dataChegada).filter(Boolean);
-      if (dates.length === 0) return null;
-      return dates.sort().reverse()[0];
-    };
-
-    if (pending === total) return { label: 'Peças Pendentes', color: '#C45E00', bg: '#FFF4E6', border: '#FFD9A8' };
-    if (pending > 0 && (bought > 0 || done > 0)) return { label: 'Comprado Parcialmente', color: '#C45E00', bg: '#FFF4E6', border: '#FFD9A8' };
-    if (bought > 0 && done === 0 && pending === 0) {
-      const date = getLatestDate(parts.filter(p => p.status === 'bought'));
-      return { label: `Aguardando Chegada ${date ? '('+date+')' : ''}`, color: '#6B21A8', bg: '#F3E8FF', border: '#D8B4FE' };
-    }
-    if (done > 0 && (bought > 0 || pending > 0)) {
-      const date = getLatestDate(parts.filter(p => p.status === 'bought'));
-      return { label: `Chegou Parcialmente ${date ? '('+date+')' : ''}`, color: '#1A4EC2', bg: '#EAF0FF', border: '#C0D0F5' };
-    }
-    if (done === total) {
-      const date = getLatestDate(parts.filter(p => p.status === 'done'));
-      return { label: `Concluído ${date ? '('+date+')' : ''}`, color: '#0A6B34', bg: '#EDFAF3', border: '#AAE6C5' };
-    }
-    return { label: 'Sem Pendencia de Peças', color: COLORS.muted, bg: COLORS.smoke, border: COLORS.border };
-  };
 
   const etapasPresentes = useMemo(() => {
     const etapas = [...new Set(vehicles.map(v=>v.etapa).filter(Boolean))];
@@ -968,36 +864,18 @@ function GenericTableView({ vehicles, role, title, subtitle, columns, initialExp
                 {columns.filter(c=>c.default).map(c => (
                   <td key={c.key} style={c.key==='os'?{fontWeight:800}:{}}>
                     {c.key==='etapa' ? <EtapaBadge etapa={v[c.key]} /> : (
-                      c.key==='statusPecas' ? (
-                        (() => {
-                          const s = getConsolidatedStatus(v.os);
-                          return (
-                            <div 
-                              onClick={(e) => { e.stopPropagation(); setSelected(v); }}
-                              style={{ 
-                                display:'inline-flex', padding:'4px 8px', borderRadius:6, fontSize:9, fontWeight:800, 
-                                textTransform:'uppercase', color:s.color, background:s.bg, border:`1px solid ${s.border}`,
-                                cursor:'pointer', whiteSpace:'nowrap'
-                              }}
-                            >
-                              {s.label}
-                            </div>
-                          );
-                        })()
+                      c.key==='dias' ? (
+                        <div style={{display:'flex', alignItems:'center', gap:8}}>
+                          <div style={{
+                            width:10, height:10, borderRadius:'50%',
+                            background: v[c.key] < 0 ? '#DC1F1F' : (v[c.key] === 0 ? '#FFA500' : '#0A6B34'),
+                            flexShrink:0
+                          }} />
+                          <span>{v[c.key] != null ? v[c.key] : '—'}</span>
+                        </div>
                       ) : (
-                        c.key==='dias' ? (
-                          <div style={{display:'flex', alignItems:'center', gap:8}}>
-                            <div style={{
-                              width:10, height:10, borderRadius:'50%',
-                              background: v[c.key] < 0 ? '#DC1F1F' : (v[c.key] === 0 ? '#FFA500' : '#0A6B34'),
-                              flexShrink:0
-                            }} />
-                            <span>{v[c.key] != null ? v[c.key] : '—'}</span>
-                          </div>
-                        ) : (
-                          c.key==='leadTime' ? (v[c.key] != null ? Math.round(Number(v[c.key])) : '—') :
-                          (c.key.toLowerCase().includes('data') || c.key==='prazo' || c.key==='previsaoEntrega' || c.key==='dataContratual' || c.key==='dataIndicativa' || c.key==='dataAt' || c.key==='dataKitVidro' || c.key==='dataEntrega' ? fmtDate(v[c.key]) : (v[c.key] ?? '—'))
-                        )
+                        c.key==='leadTime' ? (v[c.key] != null ? Math.round(Number(v[c.key])) : '—') :
+                        (c.key.toLowerCase().includes('data') || c.key==='prazo' || c.key==='previsaoEntrega' || c.key==='dataContratual' || c.key==='dataIndicativa' || c.key==='dataAt' || c.key==='dataKitVidro' || c.key==='dataEntrega' ? fmtDate(v[c.key]) : (v[c.key] ?? '—'))
                       )
                     )}
                   </td>
@@ -1056,7 +934,6 @@ const COL_OPERACIONAL = [
   { key:'dataAt', label:'Data AT', default:true },
   { key:'db', label:'DB', default:true },
   { key:'etapa', label:'Etapa', default:true },
-  { key:'statusPecas', label:'Status de Peças', default:true },
   { key:'localizacao', label:'Localização', default:true },
   { key:'observacoes', label:'Observações', default:true },
   { key:'prazo', label:'Prazo', default:true },
@@ -1081,7 +958,6 @@ const COL_COMERCIAL = [
   { key:'dataIndicativa', label:'Data Indicativa', default:true },
   { key:'dias', label:'Dias', default:true },
   { key:'etapa', label:'Status', default:true },
-  { key:'statusPecas', label:'Status de Peças', default:true },
   { key:'observacoes', label:'Observações', default:true },
 ];
 
