@@ -156,8 +156,7 @@ const usePartsStatus = () => {
       snap.docs.forEach(doc => {
         const data = doc.data();
         if (!data.os) return;
-        // Normalização radical da OS para garantir o link entre portais
-        const cleanOS = String(data.os).replace(/\D/g, '').replace(/^0+/, '');
+        const cleanOS = String(data.os).replace(/\D/g, '');
         if (!grouped[cleanOS]) grouped[cleanOS] = [];
         
         if (data.items && Array.isArray(data.items)) {
@@ -254,6 +253,19 @@ function fmtDate(d){
   return d;
 }
 
+function toSlug(name){
+  return (name||'').trim().toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+    .split(/\s+/).filter(Boolean);
+}
+
+function usernameFor(name){
+  const parts = toSlug(name);
+  if(parts.length===0) return 'user';
+  if(parts.length===1) return parts[0];
+  return `${parts[0]}.${parts[parts.length-1]}`;
+}
+
 function initials(name){
   const parts = (name||'').trim().split(/\s+/);
   return ((parts[0]?.[0]||'')+(parts[1]?.[0]||parts[0]?.[1]||'')).toUpperCase();
@@ -327,11 +339,11 @@ function Modal({ title, children, onClose }){
     <div style={{ position:'fixed', inset:0, zIndex:300, display:'flex', alignItems:'center', justifyContent:'center', padding:20 }}>
       <div className="fade-in" onClick={onClose} style={{ position:'absolute', inset:0, background:'rgba(13,13,13,.5)' }} />
       <div className="fade-up card" style={{ position:'relative', width:'100%', maxWidth:500, background:'#fff', display:'flex', flexDirection:'column', maxHeight:'90vh' }}>
-        <div style={{ padding:'18px 24px', borderBottom:`1px solid ${COLORS.border}`, display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+        <div style={{ padding:'18px 22px', borderBottom:`1px solid ${COLORS.border}`, display:'flex', alignItems:'center', justifyContent:'space-between' }}>
           <div style={{ fontSize:14, fontWeight:800, textTransform:'uppercase', letterSpacing:'.05em' }}>{title}</div>
           <button onClick={onClose} style={{ background:'none', border:'none', cursor:'pointer', color:COLORS.muted }}><Icon name="x" size={20}/></button>
         </div>
-        <div className="scroll-y" style={{ padding:24, flex:1 }}>{children}</div>
+        <div className="scroll-y" style={{ flex:1, padding:22 }}>{children}</div>
       </div>
     </div>
   );
@@ -394,8 +406,8 @@ function LoginView({ users, onLogin }){
    ============================================================ */
 function DashboardView({ vehicles, role, user }){
   const [selectedVendor, setSelectedVendor] = useState('ALL');
-  const isMaster = role === 'master';
   
+  const isMaster = role === 'master';
   const vendedoresUnicos = useMemo(() => {
     return [...new Set(vehicles.map(v=>v.vendedor).filter(Boolean))].sort();
   }, [vehicles]);
@@ -404,14 +416,26 @@ function DashboardView({ vehicles, role, user }){
     if (isMaster && selectedVendor !== 'ALL') {
       return vehicles.filter(v => v.vendedor === selectedVendor);
     }
+    if (!isMaster) {
+      return vehicles.filter(v => v.vendedor === user.vendedor);
+    }
     return vehicles;
-  }, [vehicles, selectedVendor, isMaster]);
+  }, [vehicles, selectedVendor, isMaster, user]);
 
   const total = scoped.length;
   const entregues = scoped.filter(v=>v.etapa==='ENTREGUE').length;
   const emProducao = scoped.filter(v=>v.etapa!=='ENTREGUE').length;
   const atrasados = scoped.filter(v=>v.etapa!=='ENTREGUE' && v.dias!=null && v.dias<0).length;
+  const noAmarelo = scoped.filter(v=>v.etapa!=='ENTREGUE' && v.dias!=null && v.dias===0).length;
+  const noVerde = scoped.filter(v=>v.etapa!=='ENTREGUE' && v.dias!=null && v.dias>0).length;
+  
   const taxaEntrega = total > 0 ? Math.round((entregues / total) * 100) : 0;
+  const leadTimeMedia = useMemo(() => {
+    const comLeadTime = scoped.filter(v => v.leadTime != null && v.etapa === 'ENTREGUE');
+    if (comLeadTime.length === 0) return 0;
+    const soma = comLeadTime.reduce((acc, v) => acc + Number(v.leadTime), 0);
+    return Math.round(soma / comLeadTime.length);
+  }, [scoped]);
 
   const etapaDistribution = useMemo(() => {
     const dist = {};
@@ -424,6 +448,24 @@ function DashboardView({ vehicles, role, user }){
       color: etapaMeta(etapa).color
     }));
   }, [scoped]);
+
+  const vendedorDistribution = useMemo(() => {
+    if (!isMaster) return [];
+    const dist = {};
+    vehicles.forEach(v => {
+      if (v.vendedor) {
+        dist[v.vendedor] = (dist[v.vendedor] || 0) + 1;
+      }
+    });
+    return Object.entries(dist).sort((a, b) => b[1] - a[1]).map(([vendedor, count]) => ({
+      name: vendedor,
+      value: count
+    }));
+  }, [vehicles, isMaster]);
+
+  const topEtapas = useMemo(() => {
+    return etapaDistribution.slice(0, 5);
+  }, [etapaDistribution]);
 
   return (
     <div className="fade-up" style={{ display:'flex', flexDirection:'column', gap:24 }}>
@@ -455,24 +497,82 @@ function DashboardView({ vehicles, role, user }){
       </div>
 
       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16 }}>
-        <div className="card" style={{ padding:24 }}>
-          <div style={{ fontSize:12, fontWeight:800, textTransform:'uppercase', letterSpacing:'.06em', color:COLORS.muted, marginBottom:20 }}>Distribuição por Etapa</div>
+        <div className="card" style={{ padding:20 }}>
+          <div style={{ fontSize:12, fontWeight:800, textTransform:'uppercase', color:COLORS.muted, marginBottom:16, letterSpacing:'.05em' }}>Status dos Prazos</div>
+          <div style={{ display:'flex', gap:12, alignItems:'flex-end', height:120 }}>
+            <div style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', gap:8 }}>
+              <div style={{ width:'100%', height:noVerde > 0 ? `${Math.max(20, (noVerde/Math.max(noVerde, noAmarelo, atrasados, 1)) * 100)}%` : 0, background:'#0A6B34', borderRadius:6, transition:'all .3s' }} />
+              <div style={{ fontSize:11, fontWeight:700, color:'#0A6B34' }}>No Prazo</div>
+              <div style={{ fontSize:14, fontWeight:900 }}>{noVerde}</div>
+            </div>
+            <div style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', gap:8 }}>
+              <div style={{ width:'100%', height:noAmarelo > 0 ? `${Math.max(20, (noAmarelo/Math.max(noVerde, noAmarelo, atrasados, 1)) * 100)}%` : 0, background:'#FFA500', borderRadius:6, transition:'all .3s' }} />
+              <div style={{ fontSize:11, fontWeight:700, color:'#FFA500' }}>Crítico</div>
+              <div style={{ fontSize:14, fontWeight:900 }}>{noAmarelo}</div>
+            </div>
+            <div style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', gap:8 }}>
+              <div style={{ width:'100%', height:atrasados > 0 ? `${Math.max(20, (atrasados/Math.max(noVerde, noAmarelo, atrasados, 1)) * 100)}%` : 0, background:'#DC1F1F', borderRadius:6, transition:'all .3s' }} />
+              <div style={{ fontSize:11, fontWeight:700, color:'#DC1F1F' }}>Atrasado</div>
+              <div style={{ fontSize:14, fontWeight:900 }}>{atrasados}</div>
+            </div>
+          </div>
+        </div>
+
+        <div className="card" style={{ padding:20 }}>
+          <div style={{ fontSize:12, fontWeight:800, textTransform:'uppercase', color:COLORS.muted, marginBottom:16, letterSpacing:'.05em' }}>KPIs Principais</div>
+          <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
+            <div>
+              <div style={{ fontSize:11, fontWeight:700, color:COLORS.muted, marginBottom:4 }}>Taxa de Entrega</div>
+              <div style={{ fontSize:18, fontWeight:900, color:COLORS.red }}>{taxaEntrega}%</div>
+            </div>
+            <div>
+              <div style={{ fontSize:11, fontWeight:700, color:COLORS.muted, marginBottom:4 }}>Lead Time Médio</div>
+              <div style={{ fontSize:18, fontWeight:900, color:COLORS.ink }}>{leadTimeMedia} dias</div>
+            </div>
+            <div>
+              <div style={{ fontSize:11, fontWeight:700, color:COLORS.muted, marginBottom:4 }}>Taxa de Atraso</div>
+              <div style={{ fontSize:18, fontWeight:900, color:COLORS.red }}>{total > 0 ? Math.round((atrasados / total) * 100) : 0}%</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16 }}>
+        <div className="card" style={{ padding:20 }}>
+          <div style={{ fontSize:12, fontWeight:800, textTransform:'uppercase', color:COLORS.muted, marginBottom:16, letterSpacing:'.05em' }}>Top 5 Etapas</div>
           <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
-            {etapaDistribution.map((item, i) => (
-              <div key={i} style={{ display:'flex', alignItems:'center', gap:12 }}>
+            {topEtapas.map((etapa, i) => (
+              <div key={i} style={{ display:'flex', alignItems:'center', gap:10 }}>
                 <div style={{ flex:1 }}>
-                  <div style={{ display:'flex', justifyContent:'space-between', marginBottom:4 }}>
-                    <span style={{ fontSize:11, fontWeight:700 }}>{item.name}</span>
-                    <span style={{ fontSize:11, fontWeight:800 }}>{item.value}</span>
-                  </div>
+                  <div style={{ fontSize:11, fontWeight:700, marginBottom:4 }}>{etapa.name}</div>
                   <div style={{ width:'100%', height:6, background:COLORS.smoke, borderRadius:3, overflow:'hidden' }}>
-                    <div style={{ width:`${(item.value/total)*100}%`, height:'100%', background:item.color, transition:'all .3s' }} />
+                    <div style={{ width:`${total > 0 ? (etapa.value/total)*100 : 0}%`, height:'100%', background:etapa.color, transition:'all .3s' }} />
                   </div>
                 </div>
+                <div style={{ fontSize:12, fontWeight:800, minWidth:30, textAlign:'right' }}>{etapa.value}</div>
               </div>
             ))}
           </div>
         </div>
+
+        {isMaster && vendedorDistribution.length > 0 && (
+          <div className="card" style={{ padding:20 }}>
+            <div style={{ fontSize:12, fontWeight:800, textTransform:'uppercase', color:COLORS.muted, marginBottom:16, letterSpacing:'.05em' }}>Distribuição por Vendedor</div>
+            <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+              {vendedorDistribution.slice(0, 5).map((vend, i) => (
+                <div key={i} style={{ display:'flex', alignItems:'center', gap:10 }}>
+                  <div style={{ flex:1 }}>
+                    <div style={{ fontSize:11, fontWeight:700, marginBottom:4 }}>{vend.name}</div>
+                    <div style={{ width:'100%', height:6, background:COLORS.smoke, borderRadius:3, overflow:'hidden' }}>
+                      <div style={{ width:`${vehicles.length > 0 ? (vend.value/vehicles.length)*100 : 0}%`, height:'100%', background:COLORS.red, transition:'all .3s' }} />
+                    </div>
+                  </div>
+                  <div style={{ fontSize:12, fontWeight:800, minWidth:30, textAlign:'right' }}>{vend.value}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -487,6 +587,7 @@ function PartsStatus({ os }) {
 
   useEffect(() => {
     if (!os) return;
+    
     const pecasConfig = {
       apiKey: "AIzaSyBT1N43mp6hoxXOj6bmTlqouQWSmfn32-E",
       authDomain: "portal-compras-vrz.firebaseapp.com",
@@ -504,7 +605,7 @@ function PartsStatus({ os }) {
         pecasApp = firebase.app('pecasApp');
       }
     } catch(err) {
-      setLoading(false);
+      console.error('Erro ao inicializar Firebase Peças:', err);
       return;
     }
 
@@ -513,18 +614,25 @@ function PartsStatus({ os }) {
     const pecasCol = pecasDb.collection('artifacts').doc(AID).collection('public').doc('data').collection('requests');
 
     setLoading(true);
-    // Normalização agressiva: remove zeros e caracteres especiais
-    const cleanOS = String(os).replace(/\D/g, '').replace(/^0+/, '');
+    
+    // Normalização radical da OS
+    const cleanOS = String(os).replace(/\D/g, ''); // Apenas números
     const osNum = parseInt(cleanOS, 10);
+    const osStr = cleanOS;
 
-    const unsub = pecasCol.onSnapshot(snap => {
+    let unsub = null;
+
+    // Busca exaustiva: trazemos as requisições e filtramos no cliente para garantir 100% de precisão
+    unsub = pecasCol.onSnapshot(snap => {
       let allItems = [];
       snap.docs.forEach(doc => {
         const data = doc.data();
-        const docOS = String(data.os || '').replace(/\D/g, '').replace(/^0+/, '');
+        const docOS = String(data.os || '').replace(/\D/g, '');
         
-        if (docOS === cleanOS || parseInt(docOS, 10) === osNum) {
+        // Compara a OS limpa (sem zeros à esquerda, sem caracteres especiais)
+        if (docOS === osStr || parseInt(docOS, 10) === osNum) {
           if (data.items && Array.isArray(data.items)) {
+            // Adiciona metadados da requisição a cada item
             const itemsWithMeta = data.items.map(it => ({ 
               ...it, 
               responsavel: data.responsavel, 
@@ -535,11 +643,14 @@ function PartsStatus({ os }) {
         }
       });
 
+      // Remove duplicatas se houver (baseado na descrição e status)
       const uniqueItems = allItems.filter((v, i, a) => 
         a.findIndex(t => t.description === v.description && t.status === v.status) === i
       );
 
+      // Ordena por data (mais recentes primeiro)
       uniqueItems.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+
       setParts(uniqueItems);
       setLoading(false);
     }, err => {
@@ -550,8 +661,8 @@ function PartsStatus({ os }) {
     return () => unsub && unsub();
   }, [os]);
 
-  if (loading) return <div style={{ fontSize: 11, color: COLORS.muted, padding: 10 }}><Icon name="loader-2" size={12} className="spin" /> Carregando...</div>;
-  if (parts.length === 0) return <div style={{ fontSize: 11, color: COLORS.muted, padding: 10, background: COLORS.smoke, borderRadius: 10, border: `1px solid ${COLORS.border}` }}>Nenhuma requisição de peça encontrada.</div>;
+  if (loading) return <div style={{ fontSize: 11, color: COLORS.muted, padding: 10 }}><Icon name="loader-2" size={12} className="spin" /> Carregando status das peças...</div>;
+  if (parts.length === 0) return <div style={{ fontSize: 11, color: COLORS.muted, padding: 10, background: COLORS.smoke, borderRadius: 10, border: `1px solid ${COLORS.border}` }}>Nenhuma requisição de peça encontrada para esta OS.</div>;
 
   const getStatusBadge = (status) => {
     const map = {
@@ -563,25 +674,104 @@ function PartsStatus({ os }) {
     };
     const s = map[status] || { label: status, color: COLORS.muted, bg: COLORS.smoke, border: COLORS.border };
     return (
-      <span style={{ padding: '2px 6px', borderRadius: 4, fontSize: 9, fontWeight: 800, textTransform: 'uppercase', color: s.color, background: s.bg, border: `1px solid ${s.border}` }}>{s.label}</span>
+      <span style={{ 
+        padding: '2px 6px', borderRadius: 4, fontSize: 9, fontWeight: 800, 
+        textTransform: 'uppercase', color: s.color, background: s.bg, border: `1px solid ${s.border}` 
+      }}>
+        {s.label}
+      </span>
     );
   };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       {parts.map((item, idx) => (
-        <div key={idx} style={{ padding: 12, borderRadius: 10, background: '#fff', border: `1px solid ${COLORS.border}`, display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div key={idx} style={{ 
+          padding: 12, borderRadius: 10, background: '#fff', border: `1px solid ${COLORS.border}`,
+          display: 'flex', flexDirection: 'column', gap: 6
+        }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: COLORS.ink }}>{item.description}</div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: COLORS.ink, lineHeight: 1.3 }}>{item.description}</div>
             {getStatusBadge(item.status)}
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, fontSize: 10, fontWeight: 600, color: COLORS.muted }}>
-            {item.status === 'bought' && item.previsao && <div style={{ display: 'flex', alignItems: 'center', gap: 4, color: '#6B21A8' }}><Icon name="calendar" size={10} /> Prev. Entrega: {item.previsao}</div>}
-            {item.status === 'done' && (item.dataChegada || item.previsao) && <div style={{ display: 'flex', alignItems: 'center', gap: 4, color: '#0A6B34' }}><Icon name="check-circle" size={10} /> Chegou dia: {item.dataChegada || item.previsao}</div>}
-            {item.status !== 'bought' && item.status !== 'done' && item.previsao && <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}><Icon name="calendar" size={10} /> {item.previsao}</div>}
+            {item.status === 'bought' && item.previsao && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4, color: '#6B21A8' }}>
+                <Icon name="calendar" size={10} /> Prev. Entrega: {item.previsao}
+              </div>
+            )}
+            {item.status === 'done' && (item.dataChegada || item.previsao) && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4, color: '#0A6B34' }}>
+                <Icon name="check-circle" size={10} /> Chegou dia: {item.dataChegada || item.previsao}
+              </div>
+            )}
+            {item.status !== 'bought' && item.status !== 'done' && item.previsao && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <Icon name="calendar" size={10} /> {item.previsao}
+              </div>
+            )}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <Icon name="user" size={10} /> {item.responsavel}
+            </div>
           </div>
         </div>
       ))}
+    </div>
+  );
+}
+
+/* ============================================================
+   DRAWER DE VEÍCULO
+   ============================================================ */
+function VehicleDrawer({ vehicle, onClose, role }){
+  const fields = [
+    { label:'OS', key:'os' },
+    { label:'Cliente', key:'cliente' },
+    { label:'Modelo', key:'modelo' },
+    { label:'Chassi', key:'chassi' },
+    { label:'Cor', key:'cor' },
+    { label:'Vendedor', key:'vendedor' },
+    { label:'Etapa', key:'etapa' },
+    { label:'Data Entrada', key:'dataEntrada' },
+    { label:'Data Desmontagem', key:'dataDesmontagem' },
+    { label:'Data Kit Vidro', key:'dataKitVidro' },
+    { label:'Data AT', key:'dataAt' },
+    { label:'Observações', key:'observacoes' },
+  ];
+
+  return (
+    <div style={{ position:'fixed', inset:0, zIndex:200, display:'flex', alignItems:'flex-end' }}>
+      <div className="fade-in" onClick={onClose} style={{ position:'absolute', inset:0, background:'rgba(13,13,13,.3)' }} />
+      <div className="fade-up card" style={{ position:'relative', width:'100%', maxWidth:420, borderRadius:'20px 20px 0 0', maxHeight:'85vh', display:'flex', flexDirection:'column' }}>
+        <div style={{ padding:'20px 24px', borderBottom:`1px solid ${COLORS.border}`, display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+          <div style={{ fontSize:14, fontWeight:800, textTransform:'uppercase', letterSpacing:'.05em' }}>Detalhes do Veículo</div>
+          <button onClick={onClose} style={{ background:'none', border:'none', cursor:'pointer', color:COLORS.muted }}><Icon name="x" size={20}/></button>
+        </div>
+        <div className="scroll-y" style={{ flex:1, padding:'20px 24px', display:'flex', flexDirection:'column', gap:18 }}>
+          <div style={{ display:'flex', flexDirection:'column', gap:18, borderBottom:`1px solid ${COLORS.border}`, paddingBottom:20 }}>
+            {fields.map(f => (
+              <div key={f.key}>
+                <div style={{ fontSize:9, fontWeight:800, textTransform:'uppercase', color:COLORS.muted, marginBottom:6, letterSpacing:'.05em' }}>{f.label}</div>
+                <div style={{ fontSize:13, fontWeight:600, color:COLORS.ink }}>
+                  {f.key==='etapa' ? <EtapaBadge etapa={vehicle[f.key]} /> : (
+                    f.key.toLowerCase().includes('data') ? fmtDate(vehicle[f.key]) : (vehicle[f.key] ?? '—')
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ marginTop: 4 }}>
+            <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:12 }}>
+              <div style={{ width:24, height:24, borderRadius:6, background:COLORS.redLight, display:'flex', alignItems:'center', justifyContent:'center' }}>
+                <Icon name="package" size={14} color={COLORS.red} />
+              </div>
+              <div style={{ fontSize:12, fontWeight:800, textTransform:'uppercase', letterSpacing:'.05em' }}>Status das Peças (Portal de Compras)</div>
+            </div>
+            <PartsStatus os={vehicle.os} />
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -599,7 +789,7 @@ function GenericTableView({ vehicles, role, title, subtitle, columns, initialExp
   const { allParts, loading: partsLoading } = usePartsStatus();
 
   const getConsolidatedStatus = (os) => {
-    const cleanOS = String(os).replace(/\D/g, '').replace(/^0+/, '');
+    const cleanOS = String(os).replace(/\D/g, '');
     const parts = allParts[cleanOS] || [];
     if (parts.length === 0) return { label: 'Sem Pendencia de Peças', color: COLORS.muted, bg: COLORS.smoke, border: COLORS.border };
     
@@ -610,7 +800,8 @@ function GenericTableView({ vehicles, role, title, subtitle, columns, initialExp
 
     const getLatestDate = (items) => {
       const dates = items.map(it => it.previsao || it.dataChegada).filter(Boolean);
-      return dates.length > 0 ? dates.sort().reverse()[0] : null;
+      if (dates.length === 0) return null;
+      return dates.sort().reverse()[0];
     };
 
     if (pending === total) return { label: 'Peças Pendentes', color: '#C45E00', bg: '#FFF4E6', border: '#FFD9A8' };
@@ -641,65 +832,207 @@ function GenericTableView({ vehicles, role, title, subtitle, columns, initialExp
     }
   }, [etapasPresentes]);
 
+  const toggleEtapa = (e) => {
+    setSelectedEtapas(prev => {
+      const current = prev || [];
+      return current.includes(e) ? current.filter(x=>x!==e) : [...current, e];
+    });
+  };
+
+  const vendedoresPresentes = useMemo(() => {
+    return [...new Set(vehicles.map(v=>v.vendedor).filter(Boolean))].sort();
+  }, [vehicles]);
+
   const filtered = useMemo(() => {
     let result = vehicles;
-    if(selectedVendor !== 'ALL') result = result.filter(v => v.vendedor === selectedVendor);
-    if(selectedEtapas !== null) result = result.filter(v => selectedEtapas.includes(v.etapa));
+    
+    if(selectedVendor !== 'ALL'){
+      result = result.filter(v => v.vendedor === selectedVendor);
+    }
+
+    if(selectedEtapas !== null){
+      result = result.filter(v => selectedEtapas.includes(v.etapa));
+    }
+
     if(q.trim()){
       const qLower = q.toLowerCase();
-      result = result.filter(v => String(v.os).includes(qLower) || (v.cliente||'').toLowerCase().includes(qLower) || (v.modelo||'').toLowerCase().includes(qLower));
+      result = result.filter(v => 
+        String(v.os).includes(qLower) ||
+        (v.cliente||'').toLowerCase().includes(qLower) ||
+        (v.modelo||'').toLowerCase().includes(qLower) ||
+        (v.chassi||'').toLowerCase().includes(qLower)
+      );
     }
+
     return result;
   }, [vehicles, q, selectedEtapas, selectedVendor]);
+
+  const exportExcel = () => {
+    const data = filtered.map(v => {
+      const row = {};
+      exportCols.forEach(key => {
+        if(key === 'etapa') row[key] = v[key];
+        else if(key.toLowerCase().includes('data') || key === 'prazo' || key === 'previsaoEntrega') row[key] = fmtDate(v[key]);
+        else row[key] = v[key] ?? '';
+      });
+      return row;
+    });
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Dados');
+    XLSX.writeFile(wb, `${title.replace(/\s+/g,'_')}_${new Date().toISOString().slice(0,10)}.xlsx`);
+    setShowExportModal(false);
+  };
+
+  const exportPDF = () => {
+    try {
+      const doc = new jsPDF.jsPDF({ orientation: 'l', unit: 'mm', format: 'a4' });
+      const headers = exportCols.map(c => columns.find(col=>col.key===c)?.label || c);
+      const rows = filtered.map(v => exportCols.map(key => {
+        if(key === 'etapa') return v[key];
+        else if(key.toLowerCase().includes('data') || key === 'prazo' || key === 'previsaoEntrega' || key === 'dataContratual' || key === 'dataIndicativa') return fmtDate(v[key]);
+        else return v[key] ?? '';
+      }));
+      doc.text(title, 14, 10);
+      doc.autoTable({ head: [headers], body: rows, startY: 20, margin: 10, styles: { fontSize: 9 }, headStyles: { fillColor: [220, 31, 31], textColor: 255, fontStyle: 'bold' } });
+      const title2 = `${title.replace(/\s+/g,'_')}_${new Date().toISOString().slice(0,10)}`;
+      doc.save(title2 + '.pdf');
+      setShowExportModal(false);
+    } catch(err){
+      console.error('Erro ao exportar PDF:', err);
+      alert('Erro ao exportar PDF. Verifique o console para mais detalhes.');
+    }
+  };
 
   return (
     <div className="fade-up" style={{ display:'flex', flexDirection:'column', gap:16, height:'100%' }}>
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-end' }}>
-        <div><h1 style={{ fontSize:22, fontWeight:800, margin:0 }}>{title}</h1><p style={{ fontSize:12, color:COLORS.muted, margin:'4px 0 0' }}>{subtitle}</p></div>
-        <button className="btn-primary" onClick={()=>setShowExportModal(true)}><Icon name="download" size={14} /> Exportar</button>
+        <div>
+          <h1 style={{ fontSize:22, fontWeight:800, margin:0 }}>{title}</h1>
+          <p style={{ fontSize:12, color:COLORS.muted, margin:'4px 0 0', fontWeight:600 }}>{subtitle}</p>
+        </div>
+        <button className="btn-primary" onClick={()=>setShowExportModal(true)}>
+          <Icon name="download" size={14} /> Exportar
+        </button>
       </div>
 
       <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
-        <input className="input" placeholder="Buscar..." value={q} onChange={e=>setQ(e.target.value)} />
-        <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
-          {etapasPresentes.map(e => (
-            <div key={e} className={`filter-chip ${(selectedEtapas||[]).includes(e)?'active':''}`} onClick={()=>{
-              setSelectedEtapas(prev => prev.includes(e) ? prev.filter(x=>x!==e) : [...prev, e]);
-            }}>{e}</div>
-          ))}
+        <div style={{ position:'relative' }}>
+          <div style={{ position:'absolute', left:12, top:'50%', transform:'translateY(-50%)', color:COLORS.muted }}><Icon name="search" size={15}/></div>
+          <input className="input" style={{ paddingLeft:38 }} placeholder="Buscar..." value={q} onChange={e=>setQ(e.target.value)} />
+        </div>
+        
+        <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+          {showVendorFilter && vendedoresPresentes.length > 0 && (
+            <div style={{ display:'flex', gap:8, flexWrap:'wrap', alignItems:'center' }}>
+              <div style={{ fontSize:10, fontWeight:800, textTransform:'uppercase', color:COLORS.muted, marginRight:4 }}>Vendedor:</div>
+              <select 
+                className="input" 
+                style={{ width:'auto', padding:'4px 10px', height:28, fontSize:10, textTransform:'uppercase' }}
+                value={selectedVendor}
+                onChange={e => setSelectedVendor(e.target.value)}
+              >
+                <option value="ALL">Todos os Vendedores</option>
+                {vendedoresPresentes.map(v => <option key={v} value={v}>{v}</option>)}
+              </select>
+            </div>
+          )}
+
+          <div style={{ display:'flex', gap:8, flexWrap:'wrap', alignItems:'center' }}>
+            <div style={{ fontSize:10, fontWeight:800, textTransform:'uppercase', color:COLORS.muted, marginRight:4 }}>Filtrar Etapas:</div>
+            {etapasPresentes.map(e => (
+              <div key={e} className={`filter-chip ${(selectedEtapas||[]).includes(e)?'active':''}`} onClick={()=>toggleEtapa(e)}>
+                {e}
+              </div>
+            ))}
+            {selectedEtapas && selectedEtapas.length > 0 && (
+              <button onClick={()=>setSelectedEtapas([])} style={{ background:'none', border:'none', color:COLORS.red, fontSize:10, fontWeight:800, cursor:'pointer', textTransform:'uppercase' }}>Limpar Tudo</button>
+            )}
+            {selectedEtapas && selectedEtapas.length < etapasPresentes.length && (
+              <button onClick={()=>setSelectedEtapas(etapasPresentes)} style={{ background:'none', border:'none', color:COLORS.red, fontSize:10, fontWeight:800, cursor:'pointer', textTransform:'uppercase', marginLeft:8 }}>Selecionar Tudo</button>
+            )}
+          </div>
         </div>
       </div>
 
       <div className="table-container scroll-y">
         <table className="vtable" style={{ width:'100%', borderCollapse:'collapse' }}>
-          <thead><tr>{columns.filter(c=>c.default).map(c => <th key={c.key}>{c.label}</th>)}</tr></thead>
+          <thead>
+            <tr>
+              {columns.filter(c=>c.default).map(c => <th key={c.key}>{c.label}</th>)}
+            </tr>
+          </thead>
           <tbody>
             {filtered.map(v => (
               <tr key={v.os} onClick={()=>setSelected(v)}>
                 {columns.filter(c=>c.default).map(c => (
-                  <td key={c.key}>
+                  <td key={c.key} style={c.key==='os'?{fontWeight:800}:{}}>
                     {c.key==='etapa' ? <EtapaBadge etapa={v[c.key]} /> : (
                       c.key==='statusPecas' ? (
                         (() => {
                           const s = getConsolidatedStatus(v.os);
-                          return <div onClick={(e) => { e.stopPropagation(); setSelected(v); }} style={{ display:'inline-flex', padding:'4px 8px', borderRadius:6, fontSize:9, fontWeight:800, textTransform:'uppercase', color:s.color, background:s.bg, border:`1px solid ${s.border}`, cursor:'pointer' }}>{s.label}</div>;
+                          return (
+                            <div 
+                              onClick={(e) => { e.stopPropagation(); setSelected(v); }}
+                              style={{ 
+                                display:'inline-flex', padding:'4px 8px', borderRadius:6, fontSize:9, fontWeight:800, 
+                                textTransform:'uppercase', color:s.color, background:s.bg, border:`1px solid ${s.border}`,
+                                cursor:'pointer', whiteSpace:'nowrap'
+                              }}
+                            >
+                              {s.label}
+                            </div>
+                          );
                         })()
-                      ) : (c.key.toLowerCase().includes('data') || c.key==='prazo' ? fmtDate(v[c.key]) : (v[c.key] ?? '—'))
+                      ) : (
+                        c.key==='dias' ? (
+                          <div style={{display:'flex', alignItems:'center', gap:8}}>
+                            <div style={{
+                              width:10, height:10, borderRadius:'50%',
+                              background: v[c.key] < 0 ? '#DC1F1F' : (v[c.key] === 0 ? '#FFA500' : '#0A6B34'),
+                              flexShrink:0
+                            }} />
+                            <span>{v[c.key] != null ? v[c.key] : '—'}</span>
+                          </div>
+                        ) : (
+                          c.key==='leadTime' ? (v[c.key] != null ? Math.round(Number(v[c.key])) : '—') :
+                          (c.key.toLowerCase().includes('data') || c.key==='prazo' || c.key==='previsaoEntrega' || c.key==='dataContratual' || c.key==='dataIndicativa' || c.key==='dataAt' || c.key==='dataKitVidro' || c.key==='dataEntrega' ? fmtDate(v[c.key]) : (v[c.key] ?? '—'))
+                        )
+                      )
                     )}
                   </td>
                 ))}
               </tr>
             ))}
+            {filtered.length===0 && (
+              <tr><td colSpan={columns.filter(c=>c.default).length} style={{ textAlign:'center', padding:30, color:COLORS.muted, fontWeight:700 }}>Nenhum veículo encontrado.</td></tr>
+            )}
           </tbody>
         </table>
       </div>
-      {selected && (
-        <Modal title="Detalhes do Veículo" onClose={()=>setSelected(null)}>
-          <div style={{ display:'flex', flexDirection:'column', gap:18 }}>
-            <div style={{ fontSize:13, fontWeight:600 }}>OS: {selected.os} | {selected.cliente}</div>
-            <div style={{ borderTop:`1px solid ${COLORS.border}`, paddingTop:18 }}>
-              <div style={{ fontSize:12, fontWeight:800, marginBottom:12 }}>STATUS DAS PEÇAS</div>
-              <PartsStatus os={selected.os} />
+      <div style={{ fontSize:10.5, fontWeight:700, color:COLORS.muted }}>{filtered.length} veículo(s) exibido(s)</div>
+
+      {selected && <VehicleDrawer vehicle={selected} onClose={()=>setSelected(null)} role={role} />}
+
+      {showExportModal && (
+        <Modal title="Exportar Informações" onClose={()=>setShowExportModal(false)}>
+          <div style={{ display:'flex', flexDirection:'column', gap:20 }}>
+            <div>
+              <div style={{ fontSize:11, fontWeight:800, textTransform:'uppercase', color:COLORS.muted, marginBottom:12 }}>Selecione as colunas desejadas:</div>
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+                {columns.map(c => (
+                  <label key={c.key} style={{ display:'flex', alignItems:'center', gap:8, cursor:'pointer', fontSize:12, fontWeight:600 }}>
+                    <input type="checkbox" checked={exportCols.includes(c.key)} onChange={()=>{
+                      setExportCols(prev => prev.includes(c.key) ? prev.filter(x=>x!==c.key) : [...prev, c.key]);
+                    }} />
+                    {c.label}
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div style={{ display:'flex', gap:10 }}>
+              <button className="btn-ghost" style={{ flex:1 }} onClick={exportExcel}><Icon name="file-spreadsheet" size={14}/> Excel</button>
+              <button className="btn-ghost" style={{ flex:1 }} onClick={exportPDF}><Icon name="file-text" size={14}/> PDF</button>
             </div>
           </div>
         </Modal>
@@ -712,43 +1045,592 @@ const COL_OPERACIONAL = [
   { key:'os', label:'OS', default:true },
   { key:'vendedor', label:'Vendedor', default:true },
   { key:'cliente', label:'Cliente', default:true },
+  { key:'parceiro', label:'Parceiro', default:true },
   { key:'modelo', label:'Modelo', default:true },
+  { key:'fabricante', label:'Fabricante', default:true },
+  { key:'cor', label:'Cor', default:true },
+  { key:'chassi', label:'Chassi', default:true },
+  { key:'dataEntrada', label:'Data Entrada', default:true },
+  { key:'dataDesmontagem', label:'Data Desmontagem', default:true },
+  { key:'dataKitVidro', label:'Data Kit Vidro', default:true },
+  { key:'dataAt', label:'Data AT', default:true },
+  { key:'db', label:'DB', default:true },
   { key:'etapa', label:'Etapa', default:true },
   { key:'statusPecas', label:'Status de Peças', default:true },
+  { key:'localizacao', label:'Localização', default:true },
   { key:'observacoes', label:'Observações', default:true },
+  { key:'prazo', label:'Prazo', default:true },
+  { key:'previsaoEntrega', label:'Previsão Entrega', default:true },
+  { key:'dias', label:'Dias', default:true },
+  { key:'dataEntrega', label:'Data Entrega', default:true },
+  { key:'leadTime', label:'Lead Time Produção', default:true },
+  { key:'cumprimentoPrazo', label:'Cumprimento de Prazos', default:true },
 ];
 
 const COL_COMERCIAL = [
   { key:'os', label:'OS', default:true },
+  { key:'fabricante', label:'Marca', default:true },
   { key:'modelo', label:'Modelo', default:true },
+  { key:'chassi', label:'Chassi', default:true },
+  { key:'cor', label:'Cor', default:true },
   { key:'cliente', label:'Cliente', default:true },
+  { key:'dataEntrada', label:'Data Entrada', default:true },
+  { key:'dataAt', label:'Data Aut. Exército', default:true },
+  { key:'dataKitVidro', label:'Data Vidros', default:true },
+  { key:'dataContratual', label:'Data Contratual', default:true },
+  { key:'dataIndicativa', label:'Data Indicativa', default:true },
+  { key:'dias', label:'Dias', default:true },
   { key:'etapa', label:'Status', default:true },
   { key:'statusPecas', label:'Status de Peças', default:true },
   { key:'observacoes', label:'Observações', default:true },
 ];
 
-function OperacionalView({ vehicles, role }){ return <GenericTableView vehicles={vehicles} role={role} title="Visão Operacional" subtitle="Gestão da produção" columns={COL_OPERACIONAL} initialExportCols={COL_OPERACIONAL.map(c=>c.key)} />; }
-function ComercialView({ vehicles, role, user }){ return <GenericTableView vehicles={vehicles} role={role} title="Visão Comercial" subtitle="Acompanhamento de vendas" columns={COL_COMERCIAL} initialExportCols={COL_COMERCIAL.map(c=>c.key)} />; }
+function OperacionalView({ vehicles, role }){
+  return <GenericTableView 
+    vehicles={vehicles} 
+    role={role} 
+    title="Visão Operacional" 
+    subtitle="Gestão detalhada da produção e blindagem" 
+    columns={COL_OPERACIONAL} 
+    initialExportCols={COL_OPERACIONAL.map(c=>c.key)}
+  />;
+}
 
+function ComercialView({ vehicles, role, user }){
+  const isMaster = role === 'master';
+  
+  const vehiclesWithComercial = vehicles.map(v => ({
+    ...v,
+    dataContratual: calculateDataContratual(v.dataAt, v.dataKitVidro),
+    dataIndicativa: v.previsaoEntrega,
+  }));
+
+  const base = role==='comercial' ? vehiclesWithComercial.filter(v=>v.vendedor===user.vendedor) : vehiclesWithComercial;
+  
+  return <GenericTableView 
+    vehicles={base} 
+    role={role} 
+    title="Visão Comercial" 
+    subtitle={`Acompanhamento de vendas e prazos${role==='comercial' ? ' — vendedor: '+user.vendedor : ''}`} 
+    columns={COL_COMERCIAL} 
+    initialExportCols={COL_COMERCIAL.map(c=>c.key)}
+    showVendorFilter={isMaster}
+  />;
+}
+
+/* ============================================================
+   CONSULTA INTELIGENTE
+   ============================================================ */
+function findRelevantVehicles(question, vehicles){
+  const q = question.toUpperCase();
+  const osMatches = [...q.matchAll(/\b(\d{3,6})\b/g)].map(m=>parseInt(m[1],10));
+  const chassiMatches = [...question.matchAll(/\b([A-Z0-9]{9,17})\b/gi)].map(m=>m[1].toUpperCase());
+
+  let found = [];
+  if(osMatches.length){
+    found = vehicles.filter(v => osMatches.includes(v.os));
+  }
+  if(found.length===0 && chassiMatches.length){
+    found = vehicles.filter(v => chassiMatches.some(c => (v.chassi||'').toUpperCase().includes(c)));
+  }
+  if(found.length===0){
+    const words = question.toLowerCase().split(/\s+/).filter(w=>w.length>3);
+    found = vehicles.filter(v => words.some(w => (v.cliente||'').toLowerCase().includes(w) || (v.modelo||'').toLowerCase().includes(w)));
+  }
+  return found.slice(0,6);
+}
+
+function composeAnswer(question, scoped, role, user, vehicles){
+  const qlc = question.toLowerCase();
+  const q = question.toUpperCase();
+  const osMatches = [...q.matchAll(/\b(\d{3,6})\b/g)].map(m=>parseInt(m[1],10));
+  
+  if(osMatches.length && role === 'comercial'){
+    const osNumber = osMatches[0];
+    const osVehicle = vehicles.find(v => v.os === osNumber);
+    if(osVehicle && osVehicle.vendedor !== user.vendedor){
+      return 'Essa OS não pertence ao seu usuário.';
+    }
+  }
+  
+  const total = scoped.length;
+  const countAtraso = scoped.filter(v=>v.etapa!=='ENTREGUE' && v.dias!=null && v.dias<0).length;
+  const countVidro = scoped.filter(v=>v.etapa==='VIDRO').length;
+  const countEntregue = scoped.filter(v=>v.etapa==='ENTREGUE').length;
+  const countProducao = scoped.filter(v=>v.etapa!=='ENTREGUE').length;
+
+  if(/quant[oa]s/.test(qlc)){
+    if(qlc.includes('atraso')) return `Atualmente há ${countAtraso} veículo(s) em atraso, de um total de ${total}.`;
+    if(qlc.includes('vidro')) return `${countVidro} veículo(s) estão na etapa de VIDRO no momento.`;
+    if(qlc.includes('entreg')) return `${countEntregue} veículo(s) já foram entregues.`;
+    if(qlc.includes('produ')) return `${countProducao} veículo(s) estão em produção.`;
+    return `No total, ${total} veículo(s) estão cadastrados.`;
+  }
+
+  const relevant = findRelevantVehicles(question, scoped);
+  if(relevant.length===0) return 'Não encontrei nenhum veículo com esses dados. Tente informar o número da OS.';
+  if(relevant.length>1) return relevant.map(v=>`OS ${v.os}: ${v.etapa}, prazo ${fmtDate(v.prazo)}`).join('  •  ');
+
+  const v = relevant[0];
+  const daysInfo = v.dias != null ? ` (${v.dias > 0 ? '+' : ''}${v.dias} dias)` : '';
+  return `OS ${v.os} (${v.modelo}) está na etapa "${v.etapa}". Prazo: ${fmtDate(v.prazo)}${daysInfo}. ${v.observacoes ? 'Obs: '+v.observacoes : ''}`;
+}
+
+function ChatView({ vehicles, role, user }){
+  const scoped = role==='comercial' ? vehicles.filter(v=>v.vendedor===user.vendedor) : vehicles;
+  const [messages, setMessages] = useState([
+    { role:'assistant', text: `Olá! Como posso ajudar com os veículos hoje?` }
+  ]);
+  const [input, setInput] = useState('');
+  const [history, setHistory] = useState([]);
+  const [showHistory, setShowHistory] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const scrollRef = useRef(null);
+
+  useEffect(() => {
+    const loadHistory = async () => {
+      try {
+        const snap = await col('chat_history').where('userId', '==', user.id).orderBy('timestamp', 'desc').limit(50).get();
+        const docs = snap.docs.map(d => d.data());
+        setHistory(docs);
+      } catch(err){
+        console.log('Histórico ainda não disponível');
+      }
+    };
+    loadHistory();
+  }, [user.id]);
+
+  useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior:'smooth' }); }, [messages]);
+
+  const saveToHistory = async (question, answer) => {
+    try {
+      await col('chat_history').add({
+        userId: user.id,
+        userName: user.nome,
+        question,
+        answer,
+        timestamp: new Date(),
+        role: role
+      });
+    } catch(err){
+      console.log('Erro ao salvar histórico');
+    }
+  };
+
+  const ask = async (question) => {
+    if(!question.trim()) return;
+    setMessages(m => [...m, { role:'user', text: question }]);
+    setInput('');
+    setLoading(true);
+    
+    setTimeout(async () => {
+      const answer = composeAnswer(question, scoped, role, user, vehicles);
+      setMessages(m => [...m, { role:'assistant', text: answer }]);
+      await saveToHistory(question, answer);
+      setLoading(false);
+    }, 250);
+  };
+
+  return (
+    <div className="fade-up" style={{ display:'flex', flexDirection:'column', height:'100%', gap:14 }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-end' }}>
+        <div>
+          <h1 style={{ fontSize:22, fontWeight:800, margin:0 }}>Consulta Inteligente</h1>
+          <p style={{ fontSize:12, color:COLORS.muted, margin:'4px 0 0', fontWeight:600 }}>Pergunte sobre os veículos em produção</p>
+        </div>
+        {history.length > 0 && (
+          <button 
+            onClick={() => setShowHistory(!showHistory)}
+            style={{ background:'none', border:'none', cursor:'pointer', fontSize:11, fontWeight:700, color:COLORS.red, textTransform:'uppercase' }}
+          >
+            <Icon name="history" size={14} style={{ marginRight:4 }} /> Histórico ({history.length})
+          </button>
+        )}
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns: showHistory ? '1fr 280px' : '1fr', gap:16, flex:1, minHeight:0 }}>
+        <div className="card" style={{ flex:1, display:'flex', flexDirection:'column', minHeight:420 }}>
+          <div ref={scrollRef} className="scroll-y" style={{ flex:1, padding:20, display:'flex', flexDirection:'column', gap:12 }}>
+            {messages.map((m,i) => (
+              <div key={i} style={{ display:'flex', justifyContent: m.role==='user' ? 'flex-end':'flex-start' }}>
+                <div style={{
+                  maxWidth:'78%', padding:'11px 15px', borderRadius: m.role==='user' ? '14px 14px 3px 14px':'14px 14px 14px 3px',
+                  background: m.role==='user' ? COLORS.red : COLORS.smoke, color: m.role==='user' ? '#fff' : COLORS.ink,
+                  fontSize:12.5, fontWeight: m.role==='user'?600:500, lineHeight:1.55,
+                }}>
+                  {m.role==='assistant' && <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:5 }}><Icon name="sparkles" size={12} color={COLORS.red}/><span style={{ fontSize:9, fontWeight:800, textTransform:'uppercase', color:COLORS.red }}>IA</span></div>}
+                  {m.text}
+                </div>
+              </div>
+            ))}
+            {loading && (
+              <div style={{ display:'flex', justifyContent:'flex-start' }}>
+                <div style={{ maxWidth:'78%', padding:'11px 15px', borderRadius:'14px 14px 14px 3px', background:COLORS.smoke, color:COLORS.ink, fontSize:12.5 }}>
+                  <Icon name="loader-2" size={14} className="spin" />
+                </div>
+              </div>
+            )}
+          </div>
+          <form onSubmit={e=>{e.preventDefault(); ask(input);}} style={{ borderTop:`1px solid ${COLORS.border}`, padding:14, display:'flex', gap:10 }}>
+            <input className="input" placeholder="Ex: Qual o status da OS 9668?" value={input} onChange={e=>setInput(e.target.value)} disabled={loading} />
+            <button type="submit" className="btn-primary" disabled={!input.trim() || loading} style={{ padding:'0 18px' }}><Icon name="send" size={15}/></button>
+          </form>
+        </div>
+
+        {showHistory && (
+          <div className="card" style={{ padding:16, display:'flex', flexDirection:'column', gap:12, maxHeight:500, overflow:'hidden' }}>
+            <div style={{ fontSize:11, fontWeight:800, textTransform:'uppercase', color:COLORS.muted }}>Histórico de Perguntas</div>
+            <div className="scroll-y" style={{ flex:1, display:'flex', flexDirection:'column', gap:8 }}>
+              {history.map((h, i) => (
+                <div 
+                  key={i} 
+                  onClick={() => {
+                    setInput(h.question);
+                    setShowHistory(false);
+                  }}
+                  style={{ 
+                    padding:10, 
+                    background:COLORS.smoke, 
+                    borderRadius:6, 
+                    cursor:'pointer', 
+                    fontSize:11, 
+                    fontWeight:600,
+                    transition:'all .2s',
+                    border:`1px solid ${COLORS.border}`
+                  }}
+                  onMouseEnter={e => e.target.style.background = COLORS.border}
+                  onMouseLeave={e => e.target.style.background = COLORS.smoke}
+                >
+                  {h.question.substring(0, 40)}...
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   GESTÃO DE USUÁRIOS
+   ============================================================ */
+function UsersView({ users }){
+  const [editing, setEditing] = useState(null);
+  const [showAdd, setShowAdd] = useState(false);
+  const [form, setForm] = useState({ user:'', pass:'', nome:'', role:'comercial', vendedor:'', active:true });
+
+  const save = async (e) => {
+    e.preventDefault();
+    try {
+      if(editing){
+        const newId = form.user.toLowerCase().replace(/\s+/g,'.');
+        if(newId !== editing.id){
+          await col('users').doc(newId).set(stripUndefined({...form, user:newId}));
+          await col('users').doc(editing.id).delete();
+        } else {
+          await col('users').doc(editing.id).update(stripUndefined(form));
+        }
+      } else {
+        const id = form.user.toLowerCase().replace(/\s+/g,'.');
+        await col('users').doc(id).set({ ...form, user:id });
+      }
+      setEditing(null); setShowAdd(false);
+      setForm({ user:'', pass:'', nome:'', role:'comercial', vendedor:'', active:true });
+    } catch(err){ alert('Erro ao salvar usuário'); }
+  };
+
+  const remove = async (id) => {
+    if(confirm('Deseja realmente excluir este usuário?')) {
+      await col('users').doc(id).delete();
+    }
+  };
+
+  const startEdit = (u) => {
+    setEditing(u);
+    setForm({ user:u.user, pass:u.pass, nome:u.nome, role:u.role, vendedor:u.vendedor||'', active:u.active!==false });
+    setShowAdd(true);
+  };
+
+  return (
+    <div className="fade-up" style={{ display:'flex', flexDirection:'column', gap:16, height:'100%' }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-end' }}>
+        <div>
+          <h1 style={{ fontSize:22, fontWeight:800, margin:0 }}>Gestão de Usuários</h1>
+          <p style={{ fontSize:12, color:COLORS.muted, margin:'4px 0 0', fontWeight:600 }}>Criar e editar contas de acesso</p>
+        </div>
+        <button className="btn-primary" onClick={()=>{ setEditing(null); setForm({ user:'', pass:'', nome:'', role:'comercial', vendedor:'', active:true }); setShowAdd(true); }}>
+          <Icon name="plus" size={14} /> Novo Usuário
+        </button>
+      </div>
+
+      <div className="table-container scroll-y">
+        <table className="vtable" style={{ width:'100%', borderCollapse:'collapse' }}>
+          <thead>
+            <tr>
+              <th>Usuário</th>
+              <th>Nome</th>
+              <th>Perfil</th>
+              <th>Vendedor</th>
+              <th>Status</th>
+              <th>Ações</th>
+            </tr>
+          </thead>
+          <tbody>
+            {users.map(u => (
+              <tr key={u.id}>
+                <td style={{fontWeight:800}}>{u.user}</td>
+                <td>{u.nome}</td>
+                <td><span style={{ fontSize:9, fontWeight:800, textTransform:'uppercase', color:COLORS.muted }}>{ROLE_LABEL[u.role]}</span></td>
+                <td>{u.vendedor||'—'}</td>
+                <td><span style={{ fontSize:9, fontWeight:800, textTransform:'uppercase', color: u.active!==false?'#0A6B34':'#C2410C' }}>{u.active!==false?'Ativo':'Inativo'}</span></td>
+                <td>
+                  <div style={{ display:'flex', gap:8 }}>
+                    <button onClick={()=>startEdit(u)} style={{ background:'none', border:'none', cursor:'pointer', color:COLORS.red, fontSize:11, fontWeight:700 }}>Editar</button>
+                    <button onClick={()=>remove(u.id)} style={{ background:'none', border:'none', cursor:'pointer', color:COLORS.red, fontSize:11, fontWeight:700 }}>Remover</button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {showAdd && (
+        <Modal title={editing ? 'Editar Usuário' : 'Novo Usuário'} onClose={()=>{ setShowAdd(false); setEditing(null); }}>
+          <form onSubmit={save} style={{ display:'flex', flexDirection:'column', gap:16 }}>
+            <div>
+              <label style={{ fontSize:10, fontWeight:800, textTransform:'uppercase', color:COLORS.muted, display:'block', marginBottom:6 }}>Usuário (ID de Login)</label>
+              <input className="input" value={form.user} onChange={e=>setForm({...form, user:e.target.value})} required />
+            </div>
+            <div>
+              <label style={{ fontSize:10, fontWeight:800, textTransform:'uppercase', color:COLORS.muted, display:'block', marginBottom:6 }}>Senha</label>
+              <input className="input" value={form.pass} onChange={e=>setForm({...form, pass:e.target.value})} required />
+            </div>
+            <div>
+              <label style={{ fontSize:10, fontWeight:800, textTransform:'uppercase', color:COLORS.muted, display:'block', marginBottom:6 }}>Nome Completo</label>
+              <input className="input" value={form.nome} onChange={e=>setForm({...form, nome:e.target.value})} required />
+            </div>
+            <div>
+              <label style={{ fontSize:10, fontWeight:800, textTransform:'uppercase', color:COLORS.muted, display:'block', marginBottom:6 }}>Perfil</label>
+              <select className="input" value={form.role} onChange={e=>setForm({...form, role:e.target.value})}>
+                <option value="comercial">Comercial</option>
+                <option value="operacional">Operacional</option>
+                <option value="master">Master (Administrador)</option>
+              </select>
+            </div>
+            {form.role==='comercial' && (
+              <div>
+                <label style={{ fontSize:10, fontWeight:800, textTransform:'uppercase', color:COLORS.muted, display:'block', marginBottom:6 }}>Vendedor (Nome na Planilha)</label>
+                <input className="input" value={form.vendedor} onChange={e=>setForm({...form, vendedor:e.target.value})} required />
+              </div>
+            )}
+            <label style={{ display:'flex', alignItems:'center', gap:8, cursor:'pointer', fontSize:12, fontWeight:600 }}>
+              <input type="checkbox" checked={form.active} onChange={e=>setForm({...form, active:e.target.checked})} /> Usuário Ativo
+            </label>
+            <button type="submit" className="btn-primary" style={{ marginTop:10 }}>{editing?'Salvar Alterações':'Criar Usuário'}</button>
+          </form>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+/* ============================================================
+   UPLOAD DA PLANILHA
+   ============================================================ */
+const MAP_OPERACIONAL = {
+  'OS':'os', 'VENDEDOR':'vendedor', 'CLIENTE':'cliente', 'PARCEIRO':'parceiro', 'MODELO':'modelo',
+  'FABRICANTE':'fabricante', 'COR ':'cor', 'CHASSI':'chassi', 'DATA ENTRADA':'dataEntrada',
+  'DATA DESMONTAGEM':'dataDesmontagem', 'DATA KIT VIDRO':'dataKitVidro', 'DATA AT':'dataAt', 'DB':'db',
+  'ETAPA':'etapa', 'LOCALIZAÇÃO':'localizacao', 'OBSERVAÇÕES':'observacoes', 'PRAZO ':'prazo',
+  'PREVISÃO ENTREGA':'previsaoEntrega', 'DIAS':'dias', 'DATA ENTREGA':'dataEntrega',
+  'LEAD TIME PRODUÇÃO':'leadTime', 'CUMPRIMENTO DE PRAZOS':'cumprimentoPrazo',
+};
+
+const MAP_COMERCIAL = {
+  'OS':'os', 'CLIENTE':'cliente', 'MODELO':'modelo', 'CHASSI':'chassi', 'COR':'cor',
+  'DATA ENTRADA':'dataEntrada', 'DATA AUT. EXÉRCITO':'dataAt', 'DATA VIDROS':'dataKitVidro',
+  'DATA CONTRATUAL':'prazo', 'DATA NOVA PREVISÃO':'previsaoEntrega', 'DIAS':'dias',
+  'STATUS':'etapa', 'OBSERVAÇÕES':'observacoes', 'MARCA':'fabricante',
+};
+
+function excelDateToStr(v){
+  if(v==null || v==='') return null;
+  if(typeof v === 'number'){
+    const d = XLSX.SSF.parse_date_code(v);
+    if(!d) return null;
+    return `${d.y}-${String(d.m).padStart(2,'0')}-${String(d.d).padStart(2,'0')}`;
+  }
+  if(v instanceof Date){
+    return `${v.getFullYear()}-${String(v.getMonth()+1).padStart(2,'0')}-${String(v.getDate()).padStart(2,'0')}`;
+  }
+  return String(v).trim() || null;
+}
+
+function parseWorkbook(workbook){
+  const sheetNames = workbook.SheetNames;
+  let map = MAP_OPERACIONAL;
+  let ws = null;
+  let startRow = 0;
+
+  if(sheetNames.includes('Semáforo Geral')){
+    map = MAP_COMERCIAL;
+    ws = workbook.Sheets['Semáforo Geral'];
+    startRow = 2;
+  } else {
+    const mainSheet = sheetNames.find(n => n.toUpperCase().includes('PRINCIPAL')) || sheetNames[0];
+    ws = workbook.Sheets[mainSheet];
+  }
+
+  const rows = XLSX.utils.sheet_to_json(ws, { defval:null, raw:true, range: startRow });
+  const dateFields = new Set(['dataEntrada','dataDesmontagem','dataKitVidro','dataAt','prazo','previsaoEntrega','dataEntrega']);
+
+  const vehicles = [];
+  for(const row of rows){
+    const rec = {};
+    for(const [rawKey, val] of Object.entries(row)){
+      const key = rawKey.trim().toUpperCase();
+      const mapped = map[key];
+      if(!mapped) continue;
+      rec[mapped] = val;
+    }
+    if(rec.os == null || rec.os === '' || isNaN(parseInt(rec.os))) continue;
+    rec.os = parseInt(rec.os, 10);
+    dateFields.forEach(f => { if(rec[f]!=null) rec[f] = excelDateToStr(rec[f]); });
+    rec.etapa = (rec.etapa || 'RECEBIDO').toString().trim().toUpperCase();
+    if(rec.etapa === '0') rec.etapa = 'RECEBIDO';
+    rec.dias = rec.dias!=null && rec.dias!=='' ? Math.round(Number(rec.dias)) : null;
+    vehicles.push(rec);
+  }
+  return vehicles;
+}
+
+async function chunkedBatchWrite(docs, writeFn){
+  const CHUNK = 400;
+  for(let i=0; i<docs.length; i+=CHUNK){
+    const batch = db.batch();
+    docs.slice(i, i+CHUNK).forEach(d => writeFn(batch, d));
+    await batch.commit();
+  }
+}
+
+async function replaceVehiclesInFirestore(vehicles, onProgress){
+  const existingSnap = await col('vehicles').get();
+  onProgress && onProgress('Removendo dados antigos...');
+  await chunkedBatchWrite(existingSnap.docs, (batch, doc) => batch.delete(doc.ref));
+  onProgress && onProgress('Gravando veículos atualizados...');
+  await chunkedBatchWrite(vehicles, (batch, v) => batch.set(col('vehicles').doc(String(v.os)), stripUndefined(v)));
+}
+
+async function syncVendorUsers(vehicles, existingUsers, onProgress){
+  const vendorNames = [...new Set(vehicles.map(v=>v.vendedor).filter(Boolean))];
+  const existingUsernames = new Set(existingUsers.map(u=>u.user));
+  const toCreate = vendorNames.filter(name => !existingUsernames.has(usernameFor(name)));
+  if(toCreate.length===0) return [];
+  onProgress && onProgress('Criando contas de vendedores...');
+  const batch = db.batch();
+  toCreate.forEach(name => {
+    batch.set(col('users').doc(usernameFor(name)), {
+      user: usernameFor(name), pass:'vrz2026', role:'comercial', nome:name, vendedor:name, active:true,
+    });
+  });
+  await batch.commit();
+  return toCreate;
+}
+
+function UploadView({ users, history, onDone }){
+  const [dragOver, setDragOver] = useState(false);
+  const [status, setStatus] = useState('idle');
+  const [step, setStep] = useState('');
+  const [errorMsg, setErrorMsg] = useState('');
+  const [summary, setSummary] = useState(null);
+  const inputRef = useRef(null);
+
+  const processFile = async (file) => {
+    setStatus('processing');
+    setErrorMsg('');
+    setStep('Lendo arquivo...');
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type:'array', cellDates:false });
+      const vehicles = parseWorkbook(wb);
+      if(vehicles.length===0){
+        setStatus('error');
+        setErrorMsg('Não encontrei nenhuma linha válida (coluna "OS") na planilha.');
+        return;
+      }
+      await replaceVehiclesInFirestore(vehicles, setStep);
+      const newVendors = await syncVendorUsers(vehicles, users, setStep);
+      setStep('Registrando histórico...');
+      await col('uploads').add({ fileName:file.name, count:vehicles.length, date:new Date().toLocaleString('pt-BR'), ts:Date.now() });
+      setSummary({ fileName:file.name, count:vehicles.length, newVendors:newVendors.length });
+      setStatus('done');
+      onDone && onDone();
+    } catch(e){
+      console.error(e);
+      setStatus('error');
+      setErrorMsg('Erro ao processar arquivo.');
+    }
+  };
+
+  return (
+    <div className="fade-up" style={{ display:'flex', flexDirection:'column', gap:18 }}>
+      <div>
+        <h1 style={{ fontSize:22, fontWeight:800, margin:0 }}>Upload da Planilha</h1>
+        <p style={{ fontSize:12, color:COLORS.muted, margin:'4px 0 0', fontWeight:600 }}>Envie SEMAFORO (ATUALIZADO).xlsx ou SemáforoComercial.xlsx</p>
+      </div>
+      <div
+        onDragOver={e=>{e.preventDefault(); setDragOver(true);}}
+        onDragLeave={()=>setDragOver(false)}
+        onDrop={e=>{ e.preventDefault(); setDragOver(false); const f=e.dataTransfer.files[0]; if(f) processFile(f); }}
+        onClick={()=>status!=='processing' && inputRef.current?.click()}
+        className="card"
+        style={{ padding:'50px 20px', textAlign:'center', cursor: status==='processing'?'default':'pointer', borderStyle:'dashed', borderWidth:2, borderColor: dragOver?COLORS.red:COLORS.border, background: dragOver?COLORS.redLight:'#fff', transition:'all .15s' }}
+      >
+        <input ref={inputRef} type="file" accept=".xlsx,.xls" style={{ display:'none' }} onChange={e=>{ const f=e.target.files[0]; if(f) processFile(f); }} />
+        {status==='processing' ? (
+          <>
+            <Icon name="loader-2" size={30} color={COLORS.red} className="spin" />
+            <div style={{ fontWeight:800, fontSize:13, marginTop:14 }}>{step}</div>
+          </>
+        ) : (
+          <>
+            <div style={{ width:56, height:56, borderRadius:16, background:COLORS.smoke, display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 16px' }}>
+              <Icon name="file-spreadsheet" size={26} color={COLORS.red} />
+            </div>
+            <div style={{ fontWeight:800, fontSize:14 }}>Arraste a planilha aqui ou clique para selecionar</div>
+          </>
+        )}
+      </div>
+      {status==='done' && summary && (
+        <div className="fade-in card" style={{ padding:16, background:'#EDFAF3', borderColor:'#AAE6C5', color:'#0A6B34' }}>
+          <b>Sucesso!</b> {summary.count} veículos atualizados.
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ============================================================
+   APP PRINCIPAL
+   ============================================================ */
 function App(){
   const [user, setUser] = useState(() => {
     const s = localStorage.getItem('semaforo_session');
     return s ? JSON.parse(s) : null;
   });
   const [view, setView] = useState('dashboard');
-  const { data:rawVehicles, loading:vLoading } = useFirestore('vehicles');
+  const { data:vehicles, loading:vLoading } = useFirestore('vehicles');
   const { data:users, loading:uLoading } = useFirestore('users');
+  const { data:history } = useFirestore('uploads');
 
-  const role = user?.role;
-  const vehicles = useMemo(() => {
-    if (!user) return [];
-    if (role === 'master' || role === 'operacional') return rawVehicles;
-    // Filtro rigoroso por vendedor
-    return rawVehicles.filter(v => String(v.vendedor||'').trim().toLowerCase() === String(user.vendedor||'').trim().toLowerCase());
-  }, [rawVehicles, user, role]);
+  const onLogin = (u) => { setUser(u); localStorage.setItem('semaforo_session', JSON.stringify(u)); };
+  const onLogout = () => { setUser(null); localStorage.removeItem('semaforo_session'); };
 
-  if(!user || uLoading) return <LoginView users={users} onLogin={(u) => { setUser(u); localStorage.setItem('semaforo_session', JSON.stringify(u)); }} />;
+  if(!user) return <LoginView users={users} onLogin={onLogin} />;
 
+  const role = user.role;
   const NavItem = ({ id, icon, label }) => (
     <button className={`nav-item ${view===id?'active':''}`} onClick={()=>setView(id)}>
       <div className="nav-icon"><Icon name={icon} size={16} /></div>
@@ -758,23 +1640,75 @@ function App(){
 
   return (
     <div style={{ display:'flex', height:'100vh', background:'#fff' }}>
+      {/* Sidebar */}
       <div className="sidebar" style={{ width:260, background:COLORS.black, display:'flex', flexDirection:'column', padding:20 }}>
-        <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:36 }}><Icon name="traffic-light" size={18} color="#fff" /> <div style={{ color:'#fff', fontWeight:900 }}>Semáforo</div></div>
+        <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:36, paddingLeft:4 }}>
+          <div style={{ width:32, height:32, background:COLORS.red, borderRadius:9, display:'flex', alignItems:'center', justifyContent:'center' }}>
+            <Icon name="traffic-light" size={18} color="#fff" />
+          </div>
+          <div style={{ color:'#fff', fontWeight:900, fontSize:16, letterSpacing:'-.01em' }}>Semáforo</div>
+        </div>
+        
         <div style={{ flex:1, display:'flex', flexDirection:'column', gap:6 }}>
           <NavItem id="dashboard" icon="layout-dashboard" label="Dashboard" />
-          {(role === 'master' || role === 'operacional') && <NavItem id="operacional" icon="settings" label="Visão Operacional" />}
+          <NavItem id="operacional" icon="settings" label="Visão Operacional" />
           <NavItem id="comercial" icon="briefcase" label="Visão Comercial" />
+          <NavItem id="chat" icon="sparkles" label="Consulta IA" />
+          {role==='master' && (
+            <>
+              <NavItem id="upload" icon="upload-cloud" label="Atualizar Dados" />
+              <NavItem id="users" icon="users" label="Usuários" />
+            </>
+          )}
         </div>
-        <button onClick={() => { setUser(null); localStorage.removeItem('semaforo_session'); }} className="nav-item" style={{ color:COLORS.red, marginTop:'auto' }}><Icon name="log-out" size={16} /> <span>Sair</span></button>
+
+        <div style={{ marginTop:'auto', paddingTop:20, borderTop:'1px solid rgba(255,255,255,.1)' }}>
+          <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:16, paddingLeft:4 }}>
+            <div style={{ width:36, height:36, borderRadius:10, background:'rgba(255,255,255,.1)', display:'flex', alignItems:'center', justifyContent:'center', color:'#fff', fontWeight:800, fontSize:13 }}>{initials(user.nome)}</div>
+            <div style={{ minWidth:0 }}>
+              <div style={{ color:'#fff', fontSize:11.5, fontWeight:700, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{user.nome}</div>
+              <div style={{ color:'rgba(255,255,255,.4)', fontSize:9, fontWeight:800, textTransform:'uppercase', letterSpacing:'.04em', marginTop:2 }}>{ROLE_LABEL[role]}</div>
+            </div>
+          </div>
+          <button onClick={onLogout} className="nav-item" style={{ color:COLORS.red }}>
+            <div className="nav-icon" style={{ background:'rgba(220,31,31,.1)' }}><Icon name="log-out" size={16} color={COLORS.red} /></div>
+            <span>Sair</span>
+          </button>
+        </div>
       </div>
-      <div className="main-area" style={{ flex:1, padding:40, overflow:'hidden' }}>
-        {vLoading ? <div>Carregando...</div> : (
+
+      {/* Main */}
+      <div className="main-area" style={{ flex:1, padding:'32px 40px', background:'#fff', display:'flex', flexDirection:'column', overflow:'hidden' }}>
+        {vLoading || uLoading ? (
+          <div style={{ height:'100%', display:'flex', alignItems:'center', justifyContent:'center' }}>
+            <Icon name="loader-2" size={24} color={COLORS.red} className="spin" />
+          </div>
+        ) : (
           <div style={{ flex:1, display:'flex', flexDirection:'column', minHeight:0 }}>
-            {view==='dashboard' && <DashboardView vehicles={vehicles} role={role} user={user} />}
+            {view==='dashboard' && <div className="scroll-y" style={{flex:1}}><DashboardView vehicles={vehicles} role={role} user={user} /></div>}
             {view==='operacional' && <OperacionalView vehicles={vehicles} role={role} />}
             {view==='comercial' && <ComercialView vehicles={vehicles} role={role} user={user} />}
+            {view==='chat' && <ChatView vehicles={vehicles} role={role} user={user} />}
+            {view==='upload' && role==='master' && <div className="scroll-y" style={{flex:1}}><UploadView users={users} history={history} onDone={()=>{}} /></div>}
+            {view==='users' && role==='master' && <UsersView users={users} />}
           </div>
         )}
+      </div>
+
+      {/* Mobile Nav */}
+      <div className="bottom-nav">
+        <button className="bottom-nav-btn" onClick={()=>setView('dashboard')} style={{ color:view==='dashboard'?COLORS.red:COLORS.muted }}>
+          <Icon name="layout-dashboard" size={20} /><span>Início</span>
+        </button>
+        <button className="bottom-nav-btn" onClick={()=>setView('operacional')} style={{ color:view==='operacional'?COLORS.red:COLORS.muted }}>
+          <Icon name="settings" size={20} /><span>Operacional</span>
+        </button>
+        <button className="bottom-nav-btn" onClick={()=>setView('comercial')} style={{ color:view==='comercial'?COLORS.red:COLORS.muted }}>
+          <Icon name="briefcase" size={20} /><span>Comercial</span>
+        </button>
+        <button className="bottom-nav-btn" onClick={()=>setView('chat')} style={{ color:view==='chat'?COLORS.red:COLORS.muted }}>
+          <Icon name="sparkles" size={20} /><span>IA</span>
+        </button>
       </div>
     </div>
   );
