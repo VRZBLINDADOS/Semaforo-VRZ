@@ -521,131 +521,296 @@ function DashboardView({ vehicles, role, user }){
 /* ============================================================
    INTEGRAÇÃO PORTAL DE PEÇAS
    ============================================================ */
-function PartsStatus({ os }) {
-  const [parts, setParts] = useState([]);
+const PECAS_FB = {
+  apiKey: "AIzaSyBT1N43mp6hoxXOj6bmTlqouQWSmfn32-E",
+  authDomain: "portal-compras-vrz.firebaseapp.com",
+  projectId: "portal-compras-vrz",
+  storageBucket: "portal-compras-vrz.firebasestorage.app",
+  messagingSenderId: "713014398002",
+  appId: "1:713014398002:web:d89f485af020178b00002b"
+};
+const PECAS_AID = 'portal-compras-vrz';
+
+// Normaliza a OS para comparação, já que o Portal de Compras pode gravar a OS com formatação
+// diferente (ex: "09668", "OS 9668", "9668/2026", "9668-1"). Pega o PRIMEIRO grupo de dígitos
+// (em vez de concatenar todos os dígitos do texto, o que colaria sufixos como "/2026" na OS
+// e quebraria a comparação) e remove zeros à esquerda.
+function osCanonicalKey(os){
+  if(os==null) return null;
+  const s = String(os).trim();
+  const m = s.match(/\d+/);
+  if(!m) return null;
+  const n = parseInt(m[0], 10);
+  return isNaN(n) ? m[0] : String(n);
+}
+
+// Tenta interpretar datas em formato ISO (yyyy-mm-dd) ou BR (dd/mm/yyyy) para permitir comparação.
+function parseFlexDate(str){
+  if(!str) return null;
+  const s = String(str).trim();
+  let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if(m) return new Date(+m[1], +m[2]-1, +m[3]);
+  m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+  if(m) return new Date(+m[3], +m[2]-1, +m[1]);
+  return null;
+}
+
+// pending/quoting = ainda não comprado | bought = comprado, aguardando chegada | done/donated = chegou/resolvido
+function getItemStage(status){
+  if(status === 'bought') return 1;
+  if(status === 'done' || status === 'donated') return 2;
+  return 0;
+}
+
+function getItemPrevisao(item){
+  return item.previsao || null;
+}
+function getItemDataChegada(item){
+  return item.dataChegada || item.chegadaEm || item.dataEntrega || item.dataConclusao || item.previsao || null;
+}
+
+/* Hook central: busca TODAS as requisições do Portal de Peças uma única vez
+   e agrupa por OS, deduplicando por descrição (mantendo sempre o item mais recente).
+   Isso corrige pedidos duplicados e status desatualizado aparecendo na tela. */
+// Campos onde a OS pode estar gravada no documento da requisição (o nome exato pode variar).
+const OS_FIELD_CANDIDATES = ['os','OS','numeroOS','numeroOs','osNumero','numero_os','vehicleOs','veiculoOs','osVeiculo','osId'];
+
+function usePecasData(){
+  const [byOs, setByOs] = useState({});
   const [loading, setLoading] = useState(true);
+  const [debugInfo, setDebugInfo] = useState({ totalDocs:0, sampleRaw:[], error:null });
 
   useEffect(() => {
-    if (!os) return;
-    
-    const pecasConfig = {
-      apiKey: "AIzaSyBT1N43mp6hoxXOj6bmTlqouQWSmfn32-E",
-      authDomain: "portal-compras-vrz.firebaseapp.com",
-      projectId: "portal-compras-vrz",
-      storageBucket: "portal-compras-vrz.firebasestorage.app",
-      messagingSenderId: "713014398002",
-      appId: "1:713014398002:web:d89f485af020178b00002b"
-    };
-
-    let pecasApp;
-    try {
-      if (!firebase.apps.find(app => app.name === 'pecasApp')) {
-        pecasApp = firebase.initializeApp(pecasConfig, 'pecasApp');
+    let app;
+    try{
+      if(!firebase.apps.find(a => a.name === 'pecasApp')){
+        app = firebase.initializeApp(PECAS_FB, 'pecasApp');
       } else {
-        pecasApp = firebase.app('pecasApp');
+        app = firebase.app('pecasApp');
       }
-    } catch(err) {
+    } catch(err){
       console.error('Erro ao inicializar Firebase Peças:', err);
+      setDebugInfo(prev => ({ ...prev, error: 'Falha ao inicializar o app do Portal de Compras: ' + (err.message||String(err)) }));
+      setLoading(false);
       return;
     }
 
-    const pecasDb = pecasApp.firestore();
-    const AID = 'portal-compras-vrz';
-    const pecasCol = pecasDb.collection('artifacts').doc(AID).collection('public').doc('data').collection('requests');
+    let reqCol;
+    try{
+      const pecasDb = app.firestore();
+      reqCol = pecasDb.collection('artifacts').doc(PECAS_AID).collection('public').doc('data').collection('requests');
+    } catch(err){
+      console.error('Erro ao acessar Firestore do Portal de Compras:', err);
+      setDebugInfo(prev => ({ ...prev, error: 'Falha ao acessar o Firestore: ' + (err.message||String(err)) }));
+      setLoading(false);
+      return;
+    }
 
-    setLoading(true);
-    
-    // Normalização radical da OS
-    const cleanOS = String(os).replace(/\D/g, ''); // Apenas números
-    const osNum = parseInt(cleanOS, 10);
-    const osStr = cleanOS;
-
-    let unsub = null;
-
-    // Busca exaustiva: trazemos as requisições e filtramos no cliente para garantir 100% de precisão
-    unsub = pecasCol.onSnapshot(snap => {
-      let allItems = [];
+    const unsub = reqCol.onSnapshot(snap => {
+      const grouped = {};
+      const sampleRaw = [];
       snap.docs.forEach(doc => {
         const data = doc.data();
-        const docOS = String(data.os || '').replace(/\D/g, '');
-        
-        // Compara a OS limpa (sem zeros à esquerda, sem caracteres especiais)
-        if (docOS === osStr || parseInt(docOS, 10) === osNum) {
-          if (data.items && Array.isArray(data.items)) {
-            // Adiciona metadados da requisição a cada item
-            const itemsWithMeta = data.items.map(it => ({ 
-              ...it, 
-              responsavel: data.responsavel, 
-              timestamp: data.timestamp?.toDate ? data.timestamp.toDate() : data.timestamp 
-            }));
-            allItems = [...allItems, ...itemsWithMeta];
-          }
+        let rawOsFound = null, osKey = null;
+        for(const field of OS_FIELD_CANDIDATES){
+          if(data[field]==null || data[field]==='') continue;
+          rawOsFound = data[field];
+          osKey = osCanonicalKey(data[field]);
+          if(osKey) break;
         }
+        if(sampleRaw.length < 60) sampleRaw.push({ field: rawOsFound!=null ? 'ok' : 'nenhum campo de OS encontrado', raw: rawOsFound, chave: osKey });
+        if(!osKey || !Array.isArray(data.items)) return;
+        const ts = data.timestamp?.toDate ? data.timestamp.toDate() : (data.timestamp || null);
+        const tsMs = ts ? ts.getTime() : 0;
+        if(!grouped[osKey]) grouped[osKey] = {};
+        data.items.forEach(it => {
+          const descKey = (it.description || '').trim().toLowerCase();
+          if(!descKey) return;
+          const existing = grouped[osKey][descKey];
+          if(!existing || tsMs >= existing.__ts){
+            grouped[osKey][descKey] = { ...it, timestamp: ts, __ts: tsMs };
+          }
+        });
       });
-
-      // Remove duplicatas se houver (baseado na descrição e status)
-      const uniqueItems = allItems.filter((v, i, a) => 
-        a.findIndex(t => t.description === v.description && t.status === v.status) === i
-      );
-
-      // Ordena por data (mais recentes primeiro)
-      uniqueItems.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
-
-      setParts(uniqueItems);
+      const result = {};
+      Object.entries(grouped).forEach(([osKey, itemsMap]) => {
+        result[osKey] = Object.values(itemsMap).sort((a,b) => (b.__ts||0) - (a.__ts||0));
+      });
+      setByOs(result);
+      setDebugInfo({ totalDocs: snap.docs.length, sampleRaw, error:null });
       setLoading(false);
+      if(window.__PECAS_DEBUG){
+        console.log('[Peças] documentos carregados:', snap.docs.length);
+        console.log('[Peças] OS canônicas encontradas:', Object.keys(result));
+        console.log('[Peças] amostra bruta:', sampleRaw);
+      }
     }, err => {
       console.error('Erro ao buscar peças:', err);
+      setDebugInfo(prev => ({ ...prev, error: (err.code ? err.code + ': ' : '') + (err.message || String(err)) }));
       setLoading(false);
     });
 
-    return () => unsub && unsub();
-  }, [os]);
+    return () => unsub();
+  }, []);
 
-  if (loading) return <div style={{ fontSize: 11, color: COLORS.muted, padding: 10 }}><Icon name="loader-2" size={12} className="spin" /> Carregando status das peças...</div>;
-  if (parts.length === 0) return <div style={{ fontSize: 11, color: COLORS.muted, padding: 10, background: COLORS.smoke, borderRadius: 10, border: `1px solid ${COLORS.border}` }}>Nenhuma requisição de peça encontrada para esta OS.</div>;
+  return { byOs, loading, debugInfo };
+}
 
-  const getStatusBadge = (status) => {
-    const map = {
-      'pending': { label: 'Pendente', color: '#C45E00', bg: '#FFF4E6', border: '#FFD9A8' },
-      'quoting': { label: 'Em Cotação', color: '#1A4EC2', bg: '#EAF0FF', border: '#C0D0F5' },
-      'bought': { label: 'Comprado', color: '#6B21A8', bg: '#F3E8FF', border: '#D8B4FE' },
-      'done': { label: 'Chegou', color: '#0A6B34', bg: '#EDFAF3', border: '#AAE6C5' },
-      'donated': { label: 'Doado', color: COLORS.red, bg: '#FFF0F0', border: '#FFBDBD' }
-    };
-    const s = map[status] || { label: status, color: COLORS.muted, bg: COLORS.smoke, border: COLORS.border };
-    return (
-      <span style={{ 
-        padding: '2px 6px', borderRadius: 4, fontSize: 9, fontWeight: 800, 
-        textTransform: 'uppercase', color: s.color, background: s.bg, border: `1px solid ${s.border}` 
-      }}>
-        {s.label}
+function getPecasForOs(pecasByOs, os){
+  const key = osCanonicalKey(os);
+  if(!pecasByOs || !key) return [];
+  return pecasByOs[key] || [];
+}
+
+const PECA_STATUS_META = {
+  neutral:        { color: COLORS.muted, bg: COLORS.smoke,  border: COLORS.border },
+  pendentes:      { color:'#C45E00', bg:'#FFF4E6', border:'#FFD9A8' },
+  parcialCompra:  { color:'#1A4EC2', bg:'#EAF0FF', border:'#C0D0F5' },
+  aguardando:     { color:'#6B21A8', bg:'#F3E8FF', border:'#D8B4FE' },
+  parcialChegada: { color:'#B45309', bg:'#FFF6E0', border:'#FBD989' },
+  concluido:      { color:'#0A6B34', bg:'#EDFAF3', border:'#AAE6C5' },
+};
+
+function computePecaStatus(items){
+  if(!items || items.length === 0) return { label:'Sem Pendência de Peças', date:null, tone:'neutral' };
+
+  let nPending = 0, nBought = 0, nDone = 0;
+  let maxPrevisao = null, maxPrevisaoDate = null;
+  let maxChegada = null, maxChegadaDate = null;
+
+  items.forEach(it => {
+    const stage = getItemStage(it.status);
+    if(stage === 0){
+      nPending++;
+    } else if(stage === 1){
+      nBought++;
+      const raw = getItemPrevisao(it);
+      const parsed = parseFlexDate(raw);
+      if(raw && (!maxPrevisaoDate || (parsed && parsed > maxPrevisaoDate))){
+        maxPrevisao = raw; maxPrevisaoDate = parsed;
+      }
+    } else {
+      nDone++;
+      const raw = getItemDataChegada(it);
+      const parsed = parseFlexDate(raw);
+      if(raw && (!maxChegadaDate || (parsed && parsed > maxChegadaDate))){
+        maxChegada = raw; maxChegadaDate = parsed;
+      }
+    }
+  });
+
+  if(nPending > 0 && nBought === 0 && nDone === 0){
+    return { label:'Peças Pendentes', date:null, tone:'pendentes' };
+  }
+  if(nPending > 0 && (nBought > 0 || nDone > 0)){
+    return { label:'Comprado Parcialmente', date:null, tone:'parcialCompra' };
+  }
+  if(nPending === 0 && nBought > 0 && nDone === 0){
+    return { label:'Aguardando Chegada', date:maxPrevisao, tone:'aguardando' };
+  }
+  if(nPending === 0 && nBought > 0 && nDone > 0){
+    return { label:'Chegou Parcialmente', date:maxPrevisao, tone:'parcialChegada' };
+  }
+  if(nPending === 0 && nBought === 0 && nDone > 0){
+    return { label:'Concluído', date:maxChegada, tone:'concluido' };
+  }
+  return { label:'Sem Pendência de Peças', date:null, tone:'neutral' };
+}
+
+function PecaStatusBadge({ os, pecasByOs, onClick }){
+  const items = getPecasForOs(pecasByOs, os);
+  const status = computePecaStatus(items);
+  const m = PECA_STATUS_META[status.tone] || PECA_STATUS_META.neutral;
+  return (
+    <span onClick={onClick} style={{ cursor:'pointer', display:'inline-flex', flexDirection:'column', gap:3 }}>
+      <span className="badge" style={{ background:m.bg, color:m.color, border:`1px solid ${m.border}` }}>
+        <Icon name="package" size={9} />{status.label}
       </span>
-    );
-  };
+      {status.date && <span style={{ fontSize:9, fontWeight:700, color:COLORS.muted, paddingLeft:2 }}>{status.date}</span>}
+    </span>
+  );
+}
 
+function pecaItemBadge(status){
+  const map = {
+    'pending': { label: 'Pendente', color: '#C45E00', bg: '#FFF4E6', border: '#FFD9A8' },
+    'quoting': { label: 'Em Cotação', color: '#1A4EC2', bg: '#EAF0FF', border: '#C0D0F5' },
+    'bought': { label: 'Comprado', color: '#6B21A8', bg: '#F3E8FF', border: '#D8B4FE' },
+    'done': { label: 'Chegou', color: '#0A6B34', bg: '#EDFAF3', border: '#AAE6C5' },
+    'donated': { label: 'Doado', color: COLORS.red, bg: '#FFF0F0', border: '#FFBDBD' }
+  };
+  const s = map[status] || { label: status, color: COLORS.muted, bg: COLORS.smoke, border: COLORS.border };
+  return (
+    <span style={{
+      padding: '2px 6px', borderRadius: 4, fontSize: 9, fontWeight: 800,
+      textTransform: 'uppercase', color: s.color, background: s.bg, border: `1px solid ${s.border}`
+    }}>
+      {s.label}
+    </span>
+  );
+}
+
+function PecasDebugPanel({ os, debugInfo }){
+  if(!debugInfo) return null;
+  const key = osCanonicalKey(os);
+  const matches = (debugInfo.sampleRaw||[]).filter(r => r.chave === key);
+  return (
+    <div style={{ marginTop:10, padding:10, background:'#FFF9E0', border:'1px solid #F5DE8C', borderRadius:8, fontSize:10, color:'#7A5C00', display:'flex', flexDirection:'column', gap:4 }}>
+      <div style={{ fontWeight:800, textTransform:'uppercase', letterSpacing:'.04em' }}>Diagnóstico (visível só para Master)</div>
+      {debugInfo.error && (
+        <div style={{ padding:8, background:'#FFF0F0', border:'1px solid #FFBDBD', borderRadius:6, color:'#A81515', fontWeight:700 }}>
+          Erro ao conectar no Portal de Compras: {debugInfo.error}
+        </div>
+      )}
+      <div>OS procurada: {os} → chave canônica: {key || '—'}</div>
+      <div>Documentos carregados do Portal de Compras: {debugInfo.totalDocs}</div>
+      <div>Documentos cuja OS bateu com esta chave: {matches.length}</div>
+      {debugInfo.sampleRaw && debugInfo.sampleRaw.length > 0 && (
+        <details>
+          <summary style={{ cursor:'pointer', fontWeight:700 }}>Ver amostra de valores de OS encontrados nos documentos ({debugInfo.sampleRaw.length})</summary>
+          <div style={{ maxHeight:160, overflowY:'auto', marginTop:6, display:'flex', flexDirection:'column', gap:2 }}>
+            {debugInfo.sampleRaw.map((r,i) => (
+              <div key={i} className="mono">raw: {JSON.stringify(r.raw)} → chave: {r.chave || '—'}</div>
+            ))}
+          </div>
+        </details>
+      )}
+    </div>
+  );
+}
+
+function PecasDetailList({ items, os, debugInfo, showDebug }){
+  if(!items || items.length === 0){
+    return (
+      <div>
+        <div style={{ fontSize: 11, color: COLORS.muted, padding: 10, background: COLORS.smoke, borderRadius: 10, border: `1px solid ${COLORS.border}` }}>Nenhuma requisição de peça encontrada para esta OS.</div>
+        {showDebug && <PecasDebugPanel os={os} debugInfo={debugInfo} />}
+      </div>
+    );
+  }
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      {parts.map((item, idx) => (
-        <div key={idx} style={{ 
-          padding: 12, borderRadius: 10, background: '#fff', border: `1px solid ${COLORS.border}`,
-          display: 'flex', flexDirection: 'column', gap: 6
-        }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: COLORS.ink, lineHeight: 1.3 }}>{item.description}</div>
-            {getStatusBadge(item.status)}
-          </div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, fontSize: 10, fontWeight: 600, color: COLORS.muted }}>
-            {item.previsao && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                <Icon name="calendar" size={10} /> {item.previsao}
+      {items.map((item, idx) => {
+        const stage = getItemStage(item.status);
+        const dateLabel = stage === 1 ? 'Previsão de entrega' : (stage === 2 ? 'Chegou em' : null);
+        const dateVal = stage === 1 ? getItemPrevisao(item) : (stage === 2 ? getItemDataChegada(item) : null);
+        return (
+          <div key={idx} style={{
+            padding: 12, borderRadius: 10, background: '#fff', border: `1px solid ${COLORS.border}`,
+            display: 'flex', flexDirection: 'column', gap: 6
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: COLORS.ink, lineHeight: 1.3 }}>{item.description}</div>
+              {pecaItemBadge(item.status)}
+            </div>
+            {dateVal && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, fontWeight: 600, color: COLORS.muted }}>
+                <Icon name="calendar" size={10} /> {dateLabel}: {dateVal}
               </div>
             )}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              <Icon name="user" size={10} /> {item.responsavel}
-            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -653,7 +818,7 @@ function PartsStatus({ os }) {
 /* ============================================================
    DRAWER DE VEÍCULO
    ============================================================ */
-function VehicleDrawer({ vehicle, onClose, role }){
+function VehicleDrawer({ vehicle, onClose, role, pecasByOs, pecasDebugInfo }){
   const fields = [
     { label:'OS', key:'os' },
     { label:'Cliente', key:'cliente' },
@@ -668,6 +833,8 @@ function VehicleDrawer({ vehicle, onClose, role }){
     { label:'Data AT', key:'dataAt' },
     { label:'Observações', key:'observacoes' },
   ];
+
+  const items = getPecasForOs(pecasByOs, vehicle.os);
 
   return (
     <div style={{ position:'fixed', inset:0, zIndex:200, display:'flex', alignItems:'flex-end' }}>
@@ -698,7 +865,7 @@ function VehicleDrawer({ vehicle, onClose, role }){
               </div>
               <div style={{ fontSize:12, fontWeight:800, textTransform:'uppercase', letterSpacing:'.05em' }}>Status das Peças (Portal de Compras)</div>
             </div>
-            <PartsStatus os={vehicle.os} />
+            <PecasDetailList items={items} os={vehicle.os} debugInfo={pecasDebugInfo} showDebug={role==='master'} />
           </div>
         </div>
       </div>
@@ -709,11 +876,12 @@ function VehicleDrawer({ vehicle, onClose, role }){
 /* ============================================================
    TABELA GENÉRICA
    ============================================================ */
-function GenericTableView({ vehicles, role, title, subtitle, columns, initialExportCols, showVendorFilter }){
+function GenericTableView({ vehicles, role, title, subtitle, columns, initialExportCols, showVendorFilter, pecasByOs, pecasDebugInfo }){
   const [q, setQ] = useState('');
   const [selectedEtapas, setSelectedEtapas] = useState(null);
   const [selectedVendor, setSelectedVendor] = useState('ALL');
   const [selected, setSelected] = useState(null);
+  const [pecasModalVehicle, setPecasModalVehicle] = useState(null);
   const [showExportModal, setShowExportModal] = useState(false);
   const [exportCols, setExportCols] = useState(initialExportCols);
 
@@ -767,7 +935,11 @@ function GenericTableView({ vehicles, role, title, subtitle, columns, initialExp
     const data = filtered.map(v => {
       const row = {};
       exportCols.forEach(key => {
-        if(key === 'etapa') row[key] = v[key];
+        if(key === 'statusPecas'){
+          const st = computePecaStatus(getPecasForOs(pecasByOs, v.os));
+          row[key] = st.date ? `${st.label} (${st.date})` : st.label;
+        }
+        else if(key === 'etapa') row[key] = v[key];
         else if(key.toLowerCase().includes('data') || key === 'prazo' || key === 'previsaoEntrega') row[key] = fmtDate(v[key]);
         else row[key] = v[key] ?? '';
       });
@@ -785,7 +957,11 @@ function GenericTableView({ vehicles, role, title, subtitle, columns, initialExp
       const doc = new jsPDF.jsPDF({ orientation: 'l', unit: 'mm', format: 'a4' });
       const headers = exportCols.map(c => columns.find(col=>col.key===c)?.label || c);
       const rows = filtered.map(v => exportCols.map(key => {
-        if(key === 'etapa') return v[key];
+        if(key === 'statusPecas'){
+          const st = computePecaStatus(getPecasForOs(pecasByOs, v.os));
+          return st.date ? `${st.label} (${st.date})` : st.label;
+        }
+        else if(key === 'etapa') return v[key];
         else if(key.toLowerCase().includes('data') || key === 'prazo' || key === 'previsaoEntrega' || key === 'dataContratual' || key === 'dataIndicativa') return fmtDate(v[key]);
         else return v[key] ?? '';
       }));
@@ -864,6 +1040,9 @@ function GenericTableView({ vehicles, role, title, subtitle, columns, initialExp
                 {columns.filter(c=>c.default).map(c => (
                   <td key={c.key} style={c.key==='os'?{fontWeight:800}:{}}>
                     {c.key==='etapa' ? <EtapaBadge etapa={v[c.key]} /> : (
+                      c.key==='statusPecas' ? (
+                        <PecaStatusBadge os={v.os} pecasByOs={pecasByOs} onClick={(e)=>{ e.stopPropagation(); setPecasModalVehicle(v); }} />
+                      ) : (
                       c.key==='dias' ? (
                         <div style={{display:'flex', alignItems:'center', gap:8}}>
                           <div style={{
@@ -876,6 +1055,7 @@ function GenericTableView({ vehicles, role, title, subtitle, columns, initialExp
                       ) : (
                         c.key==='leadTime' ? (v[c.key] != null ? Math.round(Number(v[c.key])) : '—') :
                         (c.key.toLowerCase().includes('data') || c.key==='prazo' || c.key==='previsaoEntrega' || c.key==='dataContratual' || c.key==='dataIndicativa' || c.key==='dataAt' || c.key==='dataKitVidro' || c.key==='dataEntrega' ? fmtDate(v[c.key]) : (v[c.key] ?? '—'))
+                      )
                       )
                     )}
                   </td>
@@ -890,7 +1070,13 @@ function GenericTableView({ vehicles, role, title, subtitle, columns, initialExp
       </div>
       <div style={{ fontSize:10.5, fontWeight:700, color:COLORS.muted }}>{filtered.length} veículo(s) exibido(s)</div>
 
-      {selected && <VehicleDrawer vehicle={selected} onClose={()=>setSelected(null)} role={role} />}
+      {selected && <VehicleDrawer vehicle={selected} onClose={()=>setSelected(null)} role={role} pecasByOs={pecasByOs} pecasDebugInfo={pecasDebugInfo} />}
+
+      {pecasModalVehicle && (
+        <Modal title={`Peças — OS ${pecasModalVehicle.os}`} onClose={()=>setPecasModalVehicle(null)}>
+          <PecasDetailList items={getPecasForOs(pecasByOs, pecasModalVehicle.os)} os={pecasModalVehicle.os} debugInfo={pecasDebugInfo} showDebug={role==='master'} />
+        </Modal>
+      )}
 
       {showExportModal && (
         <Modal title="Exportar Informações" onClose={()=>setShowExportModal(false)}>
@@ -934,6 +1120,7 @@ const COL_OPERACIONAL = [
   { key:'dataAt', label:'Data AT', default:true },
   { key:'db', label:'DB', default:true },
   { key:'etapa', label:'Etapa', default:true },
+  { key:'statusPecas', label:'Status de Peças', default:true },
   { key:'localizacao', label:'Localização', default:true },
   { key:'observacoes', label:'Observações', default:true },
   { key:'prazo', label:'Prazo', default:true },
@@ -958,10 +1145,11 @@ const COL_COMERCIAL = [
   { key:'dataIndicativa', label:'Data Indicativa', default:true },
   { key:'dias', label:'Dias', default:true },
   { key:'etapa', label:'Status', default:true },
+  { key:'statusPecas', label:'Status de Peças', default:true },
   { key:'observacoes', label:'Observações', default:true },
 ];
 
-function OperacionalView({ vehicles, role }){
+function OperacionalView({ vehicles, role, pecasByOs, pecasDebugInfo }){
   return <GenericTableView 
     vehicles={vehicles} 
     role={role} 
@@ -969,10 +1157,12 @@ function OperacionalView({ vehicles, role }){
     subtitle="Gestão detalhada da produção e blindagem" 
     columns={COL_OPERACIONAL} 
     initialExportCols={COL_OPERACIONAL.map(c=>c.key)}
+    pecasByOs={pecasByOs}
+    pecasDebugInfo={pecasDebugInfo}
   />;
 }
 
-function ComercialView({ vehicles, role, user }){
+function ComercialView({ vehicles, role, user, pecasByOs, pecasDebugInfo }){
   const isMaster = role === 'master';
   
   const vehiclesWithComercial = vehicles.map(v => ({
@@ -991,6 +1181,8 @@ function ComercialView({ vehicles, role, user }){
     columns={COL_COMERCIAL} 
     initialExportCols={COL_COMERCIAL.map(c=>c.key)}
     showVendorFilter={isMaster}
+    pecasByOs={pecasByOs}
+    pecasDebugInfo={pecasDebugInfo}
   />;
 }
 
@@ -1500,6 +1692,7 @@ function App(){
   const { data:vehicles, loading:vLoading } = useFirestore('vehicles');
   const { data:users, loading:uLoading } = useFirestore('users');
   const { data:history } = useFirestore('uploads');
+  const { byOs:pecasByOs, debugInfo:pecasDebugInfo } = usePecasData();
 
   const onLogin = (u) => { setUser(u); localStorage.setItem('semaforo_session', JSON.stringify(u)); };
   const onLogout = () => { setUser(null); localStorage.removeItem('semaforo_session'); };
@@ -1562,8 +1755,8 @@ function App(){
         ) : (
           <div style={{ flex:1, display:'flex', flexDirection:'column', minHeight:0 }}>
             {view==='dashboard' && <div className="scroll-y" style={{flex:1}}><DashboardView vehicles={vehicles} role={role} user={user} /></div>}
-            {view==='operacional' && <OperacionalView vehicles={vehicles} role={role} />}
-            {view==='comercial' && <ComercialView vehicles={vehicles} role={role} user={user} />}
+            {view==='operacional' && <OperacionalView vehicles={vehicles} role={role} pecasByOs={pecasByOs} pecasDebugInfo={pecasDebugInfo} />}
+            {view==='comercial' && <ComercialView vehicles={vehicles} role={role} user={user} pecasByOs={pecasByOs} pecasDebugInfo={pecasDebugInfo} />}
             {view==='chat' && <ChatView vehicles={vehicles} role={role} user={user} />}
             {view==='upload' && role==='master' && <div className="scroll-y" style={{flex:1}}><UploadView users={users} history={history} onDone={()=>{}} /></div>}
             {view==='users' && role==='master' && <UsersView users={users} />}
