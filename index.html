@@ -77,6 +77,7 @@ body{font-family:'Plus Jakarta Sans',sans-serif;margin:0;background:#fff;overflo
 <script src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone@7.23.10/babel.min.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
 <script src="https://unpkg.com/lucide@0.383.0/dist/umd/lucide.min.js"></script>
 <script src="https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
@@ -555,18 +556,23 @@ function parseFlexDate(str){
   return null;
 }
 
-// pending/quoting = ainda não comprado | bought = comprado, aguardando chegada | done/donated = chegou/resolvido
+// Status reais gravados pelo Portal de Compras (em português): 'Pendente', 'Em Cotação',
+// 'Comprado', 'Concluído', 'Doado'. Concluído e Doado contam como "resolvido/chegou".
 function getItemStage(status){
-  if(status === 'bought') return 1;
-  if(status === 'done' || status === 'donated') return 2;
-  return 0;
+  if(status === 'Comprado') return 1;
+  if(status === 'Concluído' || status === 'Doado') return 2;
+  return 0; // 'Pendente', 'Em Cotação' ou status desconhecido
 }
 
+// Campos reais do item no Portal de Compras.
+function getItemBoughtAt(item){
+  return item.boughtAt || null;
+}
 function getItemPrevisao(item){
-  return item.previsao || null;
+  return item.deliveryDate || null;
 }
 function getItemDataChegada(item){
-  return item.dataChegada || item.chegadaEm || item.dataEntrega || item.dataConclusao || item.previsao || null;
+  return item.actualDeliveryDate || null;
 }
 
 /* Hook central: busca TODAS as requisições do Portal de Peças uma única vez
@@ -574,6 +580,16 @@ function getItemDataChegada(item){
    Isso corrige pedidos duplicados e status desatualizado aparecendo na tela. */
 // Campos onde a OS pode estar gravada no documento da requisição (o nome exato pode variar).
 const OS_FIELD_CANDIDATES = ['os','OS','numeroOS','numeroOs','osNumero','numero_os','vehicleOs','veiculoOs','osVeiculo','osId'];
+
+// Portal de Compras grava "timestamp" como Date.now() (número puro), não como Timestamp do
+// Firestore. Esta função aceita qualquer um dos formatos possíveis sem quebrar.
+function toMillis(ts){
+  if(ts==null) return 0;
+  if(typeof ts === 'number') return ts;
+  if(typeof ts.toDate === 'function') return ts.toDate().getTime();
+  if(ts instanceof Date) return ts.getTime();
+  return 0;
+}
 
 function usePecasData(){
   const [byOs, setByOs] = useState({});
@@ -595,62 +611,85 @@ function usePecasData(){
       return;
     }
 
-    let reqCol;
+    let pecasAuth, reqCol;
     try{
+      pecasAuth = app.auth();
       const pecasDb = app.firestore();
       reqCol = pecasDb.collection('artifacts').doc(PECAS_AID).collection('public').doc('data').collection('requests');
     } catch(err){
-      console.error('Erro ao acessar Firestore do Portal de Compras:', err);
-      setDebugInfo(prev => ({ ...prev, error: 'Falha ao acessar o Firestore: ' + (err.message||String(err)) }));
+      console.error('Erro ao acessar Firestore/Auth do Portal de Compras:', err);
+      setDebugInfo(prev => ({ ...prev, error: 'Falha ao acessar o Firestore/Auth: ' + (err.message||String(err)) }));
       setLoading(false);
       return;
     }
 
-    const unsub = reqCol.onSnapshot(snap => {
-      const grouped = {};
-      const sampleRaw = [];
-      snap.docs.forEach(doc => {
-        const data = doc.data();
-        let rawOsFound = null, osKey = null;
-        for(const field of OS_FIELD_CANDIDATES){
-          if(data[field]==null || data[field]==='') continue;
-          rawOsFound = data[field];
-          osKey = osCanonicalKey(data[field]);
-          if(osKey) break;
-        }
-        if(sampleRaw.length < 60) sampleRaw.push({ field: rawOsFound!=null ? 'ok' : 'nenhum campo de OS encontrado', raw: rawOsFound, chave: osKey });
-        if(!osKey || !Array.isArray(data.items)) return;
-        const ts = data.timestamp?.toDate ? data.timestamp.toDate() : (data.timestamp || null);
-        const tsMs = ts ? ts.getTime() : 0;
-        if(!grouped[osKey]) grouped[osKey] = {};
-        data.items.forEach(it => {
-          const descKey = (it.description || '').trim().toLowerCase();
-          if(!descKey) return;
-          const existing = grouped[osKey][descKey];
-          if(!existing || tsMs >= existing.__ts){
-            grouped[osKey][descKey] = { ...it, timestamp: ts, __ts: tsMs };
+    let unsubSnap = null;
+
+    const startListening = () => {
+      if(unsubSnap) return;
+      unsubSnap = reqCol.onSnapshot(snap => {
+        // Replica o algoritmo mergeByOS do próprio Portal de Compras: para cada OS, itera os
+        // documentos na ordem em que o Firestore os retorna (a mesma ordem que o Portal de
+        // Compras também vê, já que consulta a mesma coleção sem orderBy) e mantém a PRIMEIRA
+        // ocorrência de cada peça (por id, ou por descrição se não houver id). Isso garante que
+        // o status mostrado aqui seja idêntico ao que aparece no Portal de Compras.
+        const grouped = {}; // osKey -> { itemsMap: {dedupKey: item}, }
+        const sampleRaw = [];
+        snap.docs.forEach(doc => {
+          const data = doc.data();
+          let rawOsFound = null, osKey = null;
+          for(const field of OS_FIELD_CANDIDATES){
+            if(data[field]==null || data[field]==='') continue;
+            rawOsFound = data[field];
+            osKey = osCanonicalKey(data[field]);
+            if(osKey) break;
           }
+          if(sampleRaw.length < 60) sampleRaw.push({ field: rawOsFound!=null ? 'ok' : 'nenhum campo de OS encontrado', raw: rawOsFound, chave: osKey });
+          if(!osKey || !Array.isArray(data.items)) return;
+          if(!grouped[osKey]) grouped[osKey] = {};
+          data.items.forEach(it => {
+            const dedupKey = it.id != null ? String(it.id) : (it.description || '');
+            if(!dedupKey) return;
+            if(Object.prototype.hasOwnProperty.call(grouped[osKey], dedupKey)) return; // primeira ocorrência vence
+            grouped[osKey][dedupKey] = it;
+          });
         });
+        const result = {};
+        Object.entries(grouped).forEach(([osKey, itemsMap]) => {
+          result[osKey] = Object.values(itemsMap);
+        });
+
+        setByOs(result);
+        setDebugInfo({ totalDocs: snap.docs.length, sampleRaw, error:null });
+        setLoading(false);
+        if(window.__PECAS_DEBUG){
+          console.log('[Peças] documentos carregados:', snap.docs.length);
+          console.log('[Peças] OS canônicas encontradas:', Object.keys(result));
+          console.log('[Peças] amostra bruta:', sampleRaw);
+        }
+      }, err => {
+        console.error('Erro ao buscar peças:', err);
+        setDebugInfo(prev => ({ ...prev, error: (err.code ? err.code + ': ' : '') + (err.message || String(err)) }));
+        setLoading(false);
       });
-      const result = {};
-      Object.entries(grouped).forEach(([osKey, itemsMap]) => {
-        result[osKey] = Object.values(itemsMap).sort((a,b) => (b.__ts||0) - (a.__ts||0));
-      });
-      setByOs(result);
-      setDebugInfo({ totalDocs: snap.docs.length, sampleRaw, error:null });
-      setLoading(false);
-      if(window.__PECAS_DEBUG){
-        console.log('[Peças] documentos carregados:', snap.docs.length);
-        console.log('[Peças] OS canônicas encontradas:', Object.keys(result));
-        console.log('[Peças] amostra bruta:', sampleRaw);
+    };
+
+    // O Portal de Compras sempre faz login anônimo antes de ler o Firestore. Se as regras
+    // de segurança do projeto exigirem usuário autenticado, precisamos fazer o mesmo aqui
+    // antes de consultar, senão a leitura falha silenciosamente (permission-denied).
+    const unsubAuth = pecasAuth.onAuthStateChanged(u => {
+      if(u){
+        startListening();
+      } else {
+        pecasAuth.signInAnonymously().catch(err => {
+          console.error('Erro ao autenticar (anônimo) no Portal de Compras:', err);
+          setDebugInfo(prev => ({ ...prev, error: 'Falha na autenticação anônima: ' + (err.code ? err.code + ' — ' : '') + (err.message || String(err)) }));
+          setLoading(false);
+        });
       }
-    }, err => {
-      console.error('Erro ao buscar peças:', err);
-      setDebugInfo(prev => ({ ...prev, error: (err.code ? err.code + ': ' : '') + (err.message || String(err)) }));
-      setLoading(false);
     });
 
-    return () => unsub();
+    return () => { unsubAuth(); if(unsubSnap) unsubSnap(); };
   }, []);
 
   return { byOs, loading, debugInfo };
@@ -733,13 +772,13 @@ function PecaStatusBadge({ os, pecasByOs, onClick }){
 
 function pecaItemBadge(status){
   const map = {
-    'pending': { label: 'Pendente', color: '#C45E00', bg: '#FFF4E6', border: '#FFD9A8' },
-    'quoting': { label: 'Em Cotação', color: '#1A4EC2', bg: '#EAF0FF', border: '#C0D0F5' },
-    'bought': { label: 'Comprado', color: '#6B21A8', bg: '#F3E8FF', border: '#D8B4FE' },
-    'done': { label: 'Chegou', color: '#0A6B34', bg: '#EDFAF3', border: '#AAE6C5' },
-    'donated': { label: 'Doado', color: COLORS.red, bg: '#FFF0F0', border: '#FFBDBD' }
+    'Pendente': { label: 'Pendente', color: '#C45E00', bg: '#FFF4E6', border: '#FFD9A8' },
+    'Em Cotação': { label: 'Em Cotação', color: '#1A4EC2', bg: '#EAF0FF', border: '#C0D0F5' },
+    'Comprado': { label: 'Comprado', color: '#6B21A8', bg: '#F3E8FF', border: '#D8B4FE' },
+    'Concluído': { label: 'Concluído', color: '#0A6B34', bg: '#EDFAF3', border: '#AAE6C5' },
+    'Doado': { label: 'Doado', color: COLORS.red, bg: '#FFF0F0', border: '#FFBDBD' }
   };
-  const s = map[status] || { label: status, color: COLORS.muted, bg: COLORS.smoke, border: COLORS.border };
+  const s = map[status] || { label: status || 'Pendente', color: COLORS.muted, bg: COLORS.smoke, border: COLORS.border };
   return (
     <span style={{
       padding: '2px 6px', borderRadius: 4, fontSize: 9, fontWeight: 800,
@@ -792,8 +831,13 @@ function PecasDetailList({ items, os, debugInfo, showDebug }){
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       {items.map((item, idx) => {
         const stage = getItemStage(item.status);
-        const dateLabel = stage === 1 ? 'Previsão de entrega' : (stage === 2 ? 'Chegou em' : null);
-        const dateVal = stage === 1 ? getItemPrevisao(item) : (stage === 2 ? getItemDataChegada(item) : null);
+        const dateLines = [];
+        if(stage === 1){
+          if(getItemBoughtAt(item)) dateLines.push(['Comprado em', fmtDate(getItemBoughtAt(item))]);
+          if(getItemPrevisao(item)) dateLines.push(['Previsão de entrega', fmtDate(getItemPrevisao(item))]);
+        } else if(stage === 2){
+          if(getItemDataChegada(item)) dateLines.push([item.status === 'Doado' ? 'Doado em' : 'Chegou em', fmtDate(getItemDataChegada(item))]);
+        }
         return (
           <div key={idx} style={{
             padding: 12, borderRadius: 10, background: '#fff', border: `1px solid ${COLORS.border}`,
@@ -803,11 +847,11 @@ function PecasDetailList({ items, os, debugInfo, showDebug }){
               <div style={{ fontSize: 11, fontWeight: 700, color: COLORS.ink, lineHeight: 1.3 }}>{item.description}</div>
               {pecaItemBadge(item.status)}
             </div>
-            {dateVal && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, fontWeight: 600, color: COLORS.muted }}>
-                <Icon name="calendar" size={10} /> {dateLabel}: {dateVal}
+            {dateLines.map(([label, val], i) => (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, fontWeight: 600, color: COLORS.muted }}>
+                <Icon name="calendar" size={10} /> {label}: {val}
               </div>
-            )}
+            ))}
           </div>
         );
       })}
