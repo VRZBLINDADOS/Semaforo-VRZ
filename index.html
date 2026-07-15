@@ -998,7 +998,8 @@ function GenericTableView({ vehicles, role, title, subtitle, columns, initialExp
 
   const exportPDF = () => {
     try {
-      const doc = new jsPDF.jsPDF({ orientation: 'l', unit: 'mm', format: 'a4' });
+      const { jsPDF } = window.jspdf;
+      const doc = new jsPDF({ orientation: 'l', unit: 'mm', format: 'a4' });
       const headers = exportCols.map(c => columns.find(col=>col.key===c)?.label || c);
       const rows = filtered.map(v => exportCols.map(key => {
         if(key === 'statusPecas'){
@@ -1725,27 +1726,88 @@ function UploadView({ users, history, onDone }){
 }
 
 /* ============================================================
+   ALTERAR SENHA (qualquer usuário pode alterar a própria)
+   ============================================================ */
+function ChangePasswordModal({ loggedInUser, onClose, onChanged }){
+  const [senhaAtual, setSenhaAtual] = useState('');
+  const [novaSenha, setNovaSenha] = useState('');
+  const [confirmar, setConfirmar] = useState('');
+  const [erro, setErro] = useState('');
+  const [ok, setOk] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  const salvar = async () => {
+    setErro('');
+    if(senhaAtual !== loggedInUser.pass){ setErro('Senha atual incorreta.'); return; }
+    if(novaSenha.length < 4){ setErro('A nova senha precisa ter ao menos 4 caracteres.'); return; }
+    if(novaSenha !== confirmar){ setErro('As senhas não coincidem.'); return; }
+    setLoading(true);
+    try{
+      await col('users').doc(loggedInUser.id).update({ pass: novaSenha });
+      onChanged && onChanged({ ...loggedInUser, pass: novaSenha });
+      setOk(true);
+    }catch(e){
+      setErro('Erro ao salvar: ' + e.message);
+    }
+    setLoading(false);
+  };
+
+  return (
+    <Modal title="Alterar Senha" onClose={onClose}>
+      {ok ? (
+        <div style={{ textAlign:'center', padding:'10px 0' }}>
+          <div style={{ width:52, height:52, background:'#EDFAF3', borderRadius:14, display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 14px' }}><Icon name="check-circle" size={24} color="#0A6B34" /></div>
+          <div style={{ fontSize:14, fontWeight:800, marginBottom:6 }}>Senha alterada com sucesso!</div>
+          <button onClick={onClose} className="btn-primary" style={{ width:'100%', marginTop:14 }}>Fechar</button>
+        </div>
+      ) : (
+        <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
+          {erro && <div className="shake" style={{ padding:10, background:COLORS.redLight, color:COLORS.red, borderRadius:8, fontSize:12, fontWeight:600 }}>{erro}</div>}
+          <div>
+            <label style={{ fontSize:10, fontWeight:800, textTransform:'uppercase', color:COLORS.muted, display:'block', marginBottom:8 }}>Senha Atual</label>
+            <input type="password" className="input" value={senhaAtual} onChange={e=>setSenhaAtual(e.target.value)} />
+          </div>
+          <div>
+            <label style={{ fontSize:10, fontWeight:800, textTransform:'uppercase', color:COLORS.muted, display:'block', marginBottom:8 }}>Nova Senha</label>
+            <input type="password" className="input" value={novaSenha} onChange={e=>setNovaSenha(e.target.value)} />
+          </div>
+          <div>
+            <label style={{ fontSize:10, fontWeight:800, textTransform:'uppercase', color:COLORS.muted, display:'block', marginBottom:8 }}>Confirmar Nova Senha</label>
+            <input type="password" className="input" value={confirmar} onChange={e=>setConfirmar(e.target.value)} />
+          </div>
+          <button onClick={salvar} disabled={loading || !senhaAtual || !novaSenha || !confirmar} className="btn-primary" style={{ width:'100%', marginTop:6 }}>
+            {loading ? <Icon name="loader-2" size={14} className="spin" /> : <Icon name="save" size={14} />} Salvar Nova Senha
+          </button>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+/* ============================================================
    APP PRINCIPAL
    ============================================================ */
 function App(){
-  const [user, setUser] = useState(() => {
-    const s = localStorage.getItem('semaforo_session');
-    return s ? JSON.parse(s) : null;
-  });
+  const [user, setUser] = useState(null);
   const [view, setView] = useState('dashboard');
+  const [showChangePwd, setShowChangePwd] = useState(false);
   const { data:vehicles, loading:vLoading } = useFirestore('vehicles');
   const { data:users, loading:uLoading } = useFirestore('users');
   const { data:history } = useFirestore('uploads');
   const { byOs:pecasByOs, debugInfo:pecasDebugInfo } = usePecasData();
 
-  const onLogin = (u) => { setUser(u); localStorage.setItem('semaforo_session', JSON.stringify(u)); };
-  const onLogout = () => { setUser(null); localStorage.removeItem('semaforo_session'); };
+  const defaultViewForRole = (r) => r==='comercial' ? 'comercial' : 'dashboard';
+  const onLogin = (u) => { setUser(u); setView(defaultViewForRole(u.role)); };
+  const onLogout = () => { setUser(null); };
 
   if(!user) return <LoginView users={users} onLogin={onLogin} />;
 
   const role = user.role;
+  const canSeeOperacional = role==='master' || role==='operacional';
+  // Se o usuário não pode ver a view atual (ex: trocou de conta ou perdeu permissão), volta para a padrão do seu perfil.
+  const effectiveView = (view==='operacional' && !canSeeOperacional) ? defaultViewForRole(role) : view;
   const NavItem = ({ id, icon, label }) => (
-    <button className={`nav-item ${view===id?'active':''}`} onClick={()=>setView(id)}>
+    <button className={`nav-item ${effectiveView===id?'active':''}`} onClick={()=>setView(id)}>
       <div className="nav-icon"><Icon name={icon} size={16} /></div>
       <span>{label}</span>
     </button>
@@ -1764,7 +1826,7 @@ function App(){
         
         <div style={{ flex:1, display:'flex', flexDirection:'column', gap:6 }}>
           <NavItem id="dashboard" icon="layout-dashboard" label="Dashboard" />
-          <NavItem id="operacional" icon="settings" label="Visão Operacional" />
+          {canSeeOperacional && <NavItem id="operacional" icon="settings" label="Visão Operacional" />}
           <NavItem id="comercial" icon="briefcase" label="Visão Comercial" />
           <NavItem id="chat" icon="sparkles" label="Consulta IA" />
           {role==='master' && (
@@ -1783,12 +1845,24 @@ function App(){
               <div style={{ color:'rgba(255,255,255,.4)', fontSize:9, fontWeight:800, textTransform:'uppercase', letterSpacing:'.04em', marginTop:2 }}>{ROLE_LABEL[role]}</div>
             </div>
           </div>
+          <button onClick={()=>setShowChangePwd(true)} className="nav-item" style={{ color:'rgba(255,255,255,.6)' }}>
+            <div className="nav-icon"><Icon name="key" size={16} /></div>
+            <span>Alterar Senha</span>
+          </button>
           <button onClick={onLogout} className="nav-item" style={{ color:COLORS.red }}>
             <div className="nav-icon" style={{ background:'rgba(220,31,31,.1)' }}><Icon name="log-out" size={16} color={COLORS.red} /></div>
             <span>Sair</span>
           </button>
         </div>
       </div>
+
+      {showChangePwd && (
+        <ChangePasswordModal
+          loggedInUser={user}
+          onClose={()=>setShowChangePwd(false)}
+          onChanged={(updated)=>setUser(updated)}
+        />
+      )}
 
       {/* Main */}
       <div className="main-area" style={{ flex:1, padding:'32px 40px', background:'#fff', display:'flex', flexDirection:'column', overflow:'hidden' }}>
@@ -1798,28 +1872,30 @@ function App(){
           </div>
         ) : (
           <div style={{ flex:1, display:'flex', flexDirection:'column', minHeight:0 }}>
-            {view==='dashboard' && <div className="scroll-y" style={{flex:1}}><DashboardView vehicles={vehicles} role={role} user={user} /></div>}
-            {view==='operacional' && <OperacionalView vehicles={vehicles} role={role} pecasByOs={pecasByOs} pecasDebugInfo={pecasDebugInfo} />}
-            {view==='comercial' && <ComercialView vehicles={vehicles} role={role} user={user} pecasByOs={pecasByOs} pecasDebugInfo={pecasDebugInfo} />}
-            {view==='chat' && <ChatView vehicles={vehicles} role={role} user={user} />}
-            {view==='upload' && role==='master' && <div className="scroll-y" style={{flex:1}}><UploadView users={users} history={history} onDone={()=>{}} /></div>}
-            {view==='users' && role==='master' && <UsersView users={users} />}
+            {effectiveView==='dashboard' && <div className="scroll-y" style={{flex:1}}><DashboardView vehicles={vehicles} role={role} user={user} /></div>}
+            {effectiveView==='operacional' && canSeeOperacional && <OperacionalView vehicles={vehicles} role={role} pecasByOs={pecasByOs} pecasDebugInfo={pecasDebugInfo} />}
+            {effectiveView==='comercial' && <ComercialView vehicles={vehicles} role={role} user={user} pecasByOs={pecasByOs} pecasDebugInfo={pecasDebugInfo} />}
+            {effectiveView==='chat' && <ChatView vehicles={vehicles} role={role} user={user} />}
+            {effectiveView==='upload' && role==='master' && <div className="scroll-y" style={{flex:1}}><UploadView users={users} history={history} onDone={()=>{}} /></div>}
+            {effectiveView==='users' && role==='master' && <UsersView users={users} />}
           </div>
         )}
       </div>
 
       {/* Mobile Nav */}
       <div className="bottom-nav">
-        <button className="bottom-nav-btn" onClick={()=>setView('dashboard')} style={{ color:view==='dashboard'?COLORS.red:COLORS.muted }}>
+        <button className="bottom-nav-btn" onClick={()=>setView('dashboard')} style={{ color:effectiveView==='dashboard'?COLORS.red:COLORS.muted }}>
           <Icon name="layout-dashboard" size={20} /><span>Início</span>
         </button>
-        <button className="bottom-nav-btn" onClick={()=>setView('operacional')} style={{ color:view==='operacional'?COLORS.red:COLORS.muted }}>
-          <Icon name="settings" size={20} /><span>Operacional</span>
-        </button>
-        <button className="bottom-nav-btn" onClick={()=>setView('comercial')} style={{ color:view==='comercial'?COLORS.red:COLORS.muted }}>
+        {canSeeOperacional && (
+          <button className="bottom-nav-btn" onClick={()=>setView('operacional')} style={{ color:effectiveView==='operacional'?COLORS.red:COLORS.muted }}>
+            <Icon name="settings" size={20} /><span>Operacional</span>
+          </button>
+        )}
+        <button className="bottom-nav-btn" onClick={()=>setView('comercial')} style={{ color:effectiveView==='comercial'?COLORS.red:COLORS.muted }}>
           <Icon name="briefcase" size={20} /><span>Comercial</span>
         </button>
-        <button className="bottom-nav-btn" onClick={()=>setView('chat')} style={{ color:view==='chat'?COLORS.red:COLORS.muted }}>
+        <button className="bottom-nav-btn" onClick={()=>setView('chat')} style={{ color:effectiveView==='chat'?COLORS.red:COLORS.muted }}>
           <Icon name="sparkles" size={20} /><span>IA</span>
         </button>
       </div>
